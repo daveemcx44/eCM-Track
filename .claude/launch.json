@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "laravel-server",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["artisan", "serve"],
+      "port": 8000
+    },
+    {
+      "name": "queue-worker",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["artisan", "queue:listen", "--tries=1", "--timeout=0"],
+      "port": 0
+    },
+    {
+      "name": "pail-logs",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["artisan", "pail", "--timeout=0"],
+      "port": 0,
+      "autoPort": true
+    },
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite"],
+      "port": 5173
+    }
+  ]
+}
