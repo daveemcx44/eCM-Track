@@ -6,6 +6,8 @@
     showResolveDialog: false,
     showUnconfirmModal: false,
     showUnresolveModal: false,
+    showCompleteTaskModal: false,
+    showUncompleteTaskModal: false,
     showReactivationDialog: false,
     showResolveReactivationDialog: false,
     confirmProblemId: null,
@@ -47,7 +49,7 @@
             <span class="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ $member->organization }}</span>
         </div>
         <div class="ml-auto flex flex-wrap gap-2">
-            <button type="button" @click="showAddProblemModal = true" class="bg-gray-800 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-500 whitespace-nowrap">Add Problem</button>
+            <button type="button" @click="$wire.set('problemType', '{{ $activeFilter ?? '' }}'); showAddProblemModal = true" class="bg-gray-800 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-500 whitespace-nowrap">Add Problem</button>
             <button type="button" class="bg-gray-500 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-400 whitespace-nowrap">Notes</button>
             <button type="button" class="bg-indigo-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-indigo-500 whitespace-nowrap">Member Main</button>
             <button type="button" class="bg-orange-500 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-orange-400 whitespace-nowrap">NOTIFY</button>
@@ -115,7 +117,7 @@
                             <td class="px-5 py-4 text-sm font-semibold text-gray-900 dark:text-white align-top">
                                 @if($problem->tasks->count() > 0)
                                 <button type="button" @click="toggle({{ $problem->id }})" class="inline-flex items-center gap-2 group">
-                                    <svg :class="isExpanded({{ $problem->id }}) ? 'rotate-90' : ''" class="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-transform duration-200 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                                    <svg :style="isExpanded({{ $problem->id }}) ? 'transform:rotate(90deg)' : ''" class="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 shrink-0" style="transition:transform 0.2s" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
                                     <span>{{ $problem->name }}</span>
                                 </button>
                                 @else
@@ -179,7 +181,7 @@
                                 <td class="px-4 py-3 text-sm text-gray-700 dark:text-gray-300 align-top">
                                     @if($task->resources->count() > 0)
                                     <button type="button" @click="toggleTask({{ $task->id }})" class="inline-flex items-center gap-1.5 group">
-                                        <svg :class="isTaskExpanded({{ $task->id }}) ? 'rotate-90' : ''" class="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-transform duration-200 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                                        <svg :style="isTaskExpanded({{ $task->id }}) ? 'transform:rotate(90deg)' : ''" class="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 shrink-0" style="transition:transform 0.2s" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
                                         <span>{{ $task->name }}</span>
                                     </button>
                                     @else
@@ -191,10 +193,19 @@
                                     <div class="flex items-center justify-end gap-2 flex-wrap">
                                         @if($task->state === \App\Enums\TaskState::Completed && $task->completion_type)
                                             <span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-300">{{ $task->completion_type->label() }}</span>
+                                            @can('uncomplete', $task)
+                                            <button type="button" wire:click="openUncompleteTaskModal({{ $task->id }})" @click="showUncompleteTaskModal = true" class="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600 shadow-sm transition">Uncomplete</button>
+                                            @endcan
+                                        @elseif($task->state === \App\Enums\TaskState::Added && $task->type->requiresApproval())
+                                            @can('approve', $task)
+                                            <button type="button" wire:click="approveTask({{ $task->id }})" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-blue-500 text-white hover:bg-blue-600 transition shadow-sm">Approve</button>
+                                            @else
+                                            <span class="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-300 dark:bg-blue-900/10 dark:text-blue-700 cursor-default">Awaiting Approval</span>
+                                            @endcan
                                         @elseif($task->state === \App\Enums\TaskState::Added || $task->state === \App\Enums\TaskState::Approved)
                                             <button type="button" wire:click="startTask({{ $task->id }})" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-green-500 text-white hover:bg-green-600 transition shadow-sm">Start</button>
                                         @elseif($task->state === \App\Enums\TaskState::Started)
-                                            <button type="button" wire:click="completeTask({{ $task->id }})" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition shadow-sm">Complete</button>
+                                            <button type="button" wire:click="openCompleteTaskModal({{ $task->id }})" @click="showCompleteTaskModal = true" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition shadow-sm">Complete</button>
                                         @endif
                                         <button type="button" wire:click="$dispatch('open-task-detail', { taskId: {{ $task->id }} })" title="Click to view Task Details" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold bg-indigo-100 text-indigo-600 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 transition shrink-0">?</button>
                                         @if(($task->state === \App\Enums\TaskState::Started || $task->state === \App\Enums\TaskState::Completed) && !in_array($task->completion_type, [\App\Enums\TaskCompletionType::ProblemUnconfirmed, \App\Enums\TaskCompletionType::ProblemResolved]))
@@ -321,27 +332,25 @@
         <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-lg sm:mx-auto relative" @click.stop>
             <div class="px-6 py-4">
                 <div class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ __('Add New Task') }}</div>
-                <div class="mt-4 space-y-6">
+                <div class="mt-4 space-y-5">
                     <div>
                         <x-label for="taskType" value="{{ __('Task Type') }}" />
-                        <select id="taskType" wire:model="taskType" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm">
+                        <select id="taskType" wire:model.live="taskType" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm">
                             <option value="">{{ __('Enter Task Type') }}</option>
                             @foreach(\App\Enums\TaskType::cases() as $tt)
-                                @if($tt !== \App\Enums\TaskType::Goal)
-                                    <option value="{{ $tt->value }}">{{ $tt->label() }}</option>
-                                @endif
+                                <option value="{{ $tt->value }}">{{ $tt->label() }}</option>
                             @endforeach
                         </select>
                         <x-input-error for="taskType" class="mt-2" />
                     </div>
                     <div>
-                        <x-label for="taskName" value="{{ __('Task') }}" />
+                        <x-label for="taskName" value="{{ __('Task Name') }}" />
                         <x-input id="taskName" type="text" class="mt-1 block w-full" wire:model="taskName" />
                         <x-input-error for="taskName" class="mt-2" />
                     </div>
                     <div>
                         <x-label for="taskCode" value="{{ __('Task Code') }}" />
-                        <x-input id="taskCode" type="text" class="mt-1 block w-full" wire:model="taskCode" />
+                        <x-input id="taskCode" type="text" class="mt-1 block w-full" wire:model="taskCode" placeholder="{{ __('Optional') }}" />
                     </div>
                     <div>
                         <x-label for="taskEncounterSetting" value="{{ __('Encounter Setting') }}" />
@@ -353,9 +362,28 @@
                         </select>
                     </div>
                     <div>
+                        <x-label for="taskProvider" value="{{ __('Task Provider') }}" />
+                        <x-input id="taskProvider" type="text" class="mt-1 block w-full" wire:model="taskProvider" placeholder="{{ __('Optional') }}" />
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <x-label for="taskDate" value="{{ __('Task Date') }}" />
+                            <x-input id="taskDate" type="date" class="mt-1 block w-full" wire:model="taskDate" />
+                        </div>
+                        <div>
+                            <x-label for="taskDueDate" value="{{ __('Due Date') }}" />
+                            <x-input id="taskDueDate" type="date" class="mt-1 block w-full" wire:model="taskDueDate" />
+                        </div>
+                    </div>
+                    <div>
                         <x-label value="{{ __('Associated Problem') }}" />
                         <p class="mt-1 text-sm text-gray-700 dark:text-gray-300">{{ $this->getTaskProblemName() }}</p>
                     </div>
+                    @if($taskType && $taskType !== 'goal')
+                    <div class="text-xs text-gray-500 dark:text-gray-400 italic">
+                        This task type may require approval before it can be started.
+                    </div>
+                    @endif
                     <x-input-error for="taskProblemId" class="mt-2" />
                 </div>
             </div>
@@ -449,6 +477,56 @@
             <div class="flex justify-end gap-2 px-6 py-4 bg-gray-100 dark:bg-gray-700">
                 <x-secondary-button type="button" @click="showReactivationDialog = false; $wire.confirmProblem(reactivationProblemId, false)">{{ __('No, just confirm') }}</x-secondary-button>
                 <x-button type="button" @click="showReactivationDialog = false; $wire.confirmProblem(reactivationProblemId, true)">{{ __('Yes, reactivate tasks') }}</x-button>
+            </div>
+        </div>
+    </div>
+
+    {{-- Complete Task Modal --}}
+    <div x-show="showCompleteTaskModal" x-cloak class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50" @keydown.escape.window="showCompleteTaskModal = false">
+        <div class="fixed inset-0" @click="showCompleteTaskModal = false"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative" @click.stop>
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Complete Task</h3>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Select a completion reason:</p>
+                <div class="mt-4 space-y-2">
+                    <label class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                        <input type="radio" wire:model="completionReason" value="completed" class="text-indigo-600 focus:ring-indigo-500">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">Complete – Task completed</span>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                        <input type="radio" wire:model="completionReason" value="cancelled" class="text-indigo-600 focus:ring-indigo-500">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">Complete – Task cancelled</span>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                        <input type="radio" wire:model="completionReason" value="terminated" class="text-indigo-600 focus:ring-indigo-500">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">Complete – Task terminated</span>
+                    </label>
+                </div>
+                <x-input-error for="completionReason" class="mt-2" />
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" @click="showCompleteTaskModal = false">{{ __('Cancel') }}</x-secondary-button>
+                <button type="button" wire:click="completeTask" @click="showCompleteTaskModal = false" class="inline-flex items-center px-4 py-2 bg-rose-500 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-rose-600 transition">{{ __('Complete Task') }}</button>
+            </div>
+        </div>
+    </div>
+
+    {{-- Uncomplete Task Modal --}}
+    <div x-show="showUncompleteTaskModal" x-cloak class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50" @keydown.escape.window="showUncompleteTaskModal = false">
+        <div class="fixed inset-0" @click="showUncompleteTaskModal = false"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative" @click.stop>
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Uncomplete Task</h3>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">This will revert the task to Started status.</p>
+                <div class="mt-4">
+                    <x-label for="uncompleteTaskNote" value="{{ __('Explanatory Note (required)') }}" />
+                    <textarea id="uncompleteTaskNote" wire:model="uncompleteTaskNote" rows="3" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm" placeholder="Enter the reason for uncompleting this task..."></textarea>
+                    <x-input-error for="uncompleteTaskNote" class="mt-2" />
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" @click="showUncompleteTaskModal = false">{{ __('Cancel') }}</x-secondary-button>
+                <button type="button" wire:click="uncompleteTask" @click="showUncompleteTaskModal = false" class="inline-flex items-center px-4 py-2 bg-amber-500 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-amber-600 transition">{{ __('Uncomplete') }}</button>
             </div>
         </div>
     </div>

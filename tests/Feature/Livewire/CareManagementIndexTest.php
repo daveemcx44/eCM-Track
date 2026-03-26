@@ -13,6 +13,11 @@ use App\Models\Task;
 use App\Models\User;
 use App\Enums\TaskCompletionType;
 use App\Enums\TaskState;
+use App\Enums\TaskType;
+use App\Notifications\TaskAddedNotification;
+use App\Notifications\TaskCompletedNotification;
+use App\Notifications\TaskUncompletedNotification;
+use App\Notifications\TaskStartedNotification;
 use App\Models\Note;
 use App\Notifications\ProblemAddedNotification;
 use App\Notifications\ProblemConfirmedNotification;
@@ -1410,5 +1415,1102 @@ class CareManagementIndexTest extends TestCase
             ->call('saveTask');
 
         $this->assertDatabaseMissing('tasks', ['name' => 'Should not save']);
+    }
+
+    // ─── CM-TASK-001: Add a Task to a Confirmed Problem ─────────
+
+    public function test_task_created_under_confirmed_problem(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Referrals->value)
+            ->set('taskName', 'Refer to specialist')
+            ->set('taskCode', 'REF-001')
+            ->set('taskEncounterSetting', 'clinic')
+            ->set('taskProvider', 'Dr. Smith')
+            ->set('taskDate', '2026-03-27')
+            ->set('taskDueDate', '2026-04-15')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Refer to specialist')->first();
+        $this->assertNotNull($task);
+        $this->assertEquals(TaskState::Added, $task->state);
+        $this->assertEquals($problem->id, $task->problem_id);
+        $this->assertEquals('REF-001', $task->code);
+        $this->assertEquals('Dr. Smith', $task->provider);
+        $this->assertEquals($careManager->id, $task->submitted_by);
+        $this->assertNotNull($task->submitted_at);
+    }
+
+    public function test_task_blocked_when_problem_not_confirmed(): void
+    {
+        $problem = Problem::factory()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'state' => ProblemState::Added,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Procedure->value)
+            ->set('taskName', 'Should not work')
+            ->call('saveTask')
+            ->assertHasErrors(['taskProblemId']);
+
+        $this->assertDatabaseMissing('tasks', ['name' => 'Should not work']);
+    }
+
+    public function test_task_requires_name_and_type(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', '')
+            ->set('taskName', '')
+            ->call('saveTask')
+            ->assertHasErrors(['taskType', 'taskName']);
+    }
+
+    public function test_goal_task_skips_approval(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Goal->value)
+            ->set('taskName', 'Reduce blood pressure')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Reduce blood pressure')->first();
+        $this->assertNotNull($task);
+        $this->assertEquals(TaskType::Goal, $task->type);
+        // Goal type does not require approval — Start should be available directly
+        $this->assertFalse($task->type->requiresApproval());
+    }
+
+    public function test_non_goal_task_requires_approval(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Referrals->value)
+            ->set('taskName', 'Referral to lab')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Referral to lab')->first();
+        $this->assertNotNull($task);
+        $this->assertTrue($task->type->requiresApproval());
+    }
+
+    public function test_task_added_creates_audit_event(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Medication->value)
+            ->set('taskName', 'Audit task test')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Audit task test')->first();
+
+        $this->assertDatabaseHas('state_change_histories', [
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => null,
+            'to_state' => 'added',
+            'changed_by' => $careManager->id,
+        ]);
+    }
+
+    public function test_task_added_notifies_lead_care_manager(): void
+    {
+        Notification::fake();
+
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $leadCm = User::factory()->create();
+        $memberWithLead = Member::factory()->create(['lead_care_manager' => $leadCm->id]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $memberWithLead->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $memberWithLead])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::FollowUp->value)
+            ->set('taskName', 'Follow up call')
+            ->call('saveTask');
+
+        Notification::assertSentTo($leadCm, TaskAddedNotification::class);
+    }
+
+    public function test_task_is_immutable_no_delete(): void
+    {
+        $component = Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member]);
+
+        $this->assertFalse(method_exists($component->instance(), 'deleteTask'));
+    }
+
+    public function test_approve_task_transitions_to_approved(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Approved, $task->state);
+        $this->assertEquals($careManager->id, $task->approved_by);
+        $this->assertNotNull($task->approved_at);
+    }
+
+    public function test_all_11_task_types_available_in_dropdown(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $component = Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member]);
+
+        foreach (TaskType::cases() as $type) {
+            $component->assertSee($type->label());
+        }
+    }
+
+    // ─── CM-TASK-002: Approve a Task ───────────────────────────
+
+    public function test_supervisor_can_approve_task(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Approved, $task->state);
+        $this->assertEquals($supervisor->id, $task->approved_by);
+        $this->assertNotNull($task->approved_at);
+    }
+
+    public function test_authorized_clinician_can_approve_task(): void
+    {
+        $clinician = User::factory()->create(['role' => UserRole::AuthorizedClinician]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Procedure,
+        ]);
+
+        Livewire::actingAs($clinician)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Approved, $task->state);
+    }
+
+    public function test_care_manager_cannot_approve_task(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Added, $task->state);
+    }
+
+    public function test_chw_cannot_approve_task(): void
+    {
+        $chw = User::factory()->create(['role' => UserRole::CommunityHealthWorker]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Medication,
+        ]);
+
+        Livewire::actingAs($chw)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Added, $task->state);
+    }
+
+    public function test_goal_task_never_requires_approval(): void
+    {
+        $this->assertFalse(TaskType::Goal->requiresApproval());
+
+        // Goal tasks should show Start directly, not Approve
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+        ]);
+
+        // Policy should deny approve on Goal tasks
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $this->assertFalse($supervisor->can('approve', $task));
+    }
+
+    public function test_non_goal_tasks_require_approval(): void
+    {
+        $nonGoalTypes = [
+            TaskType::Referrals, TaskType::CommunitySupportsReferral,
+            TaskType::Procedure, TaskType::DiagnosticStudy,
+            TaskType::Medication, TaskType::FollowUp,
+            TaskType::Evaluation, TaskType::Admission,
+            TaskType::Discharge, TaskType::Action,
+        ];
+
+        foreach ($nonGoalTypes as $type) {
+            $this->assertTrue($type->requiresApproval(), "{$type->label()} should require approval");
+        }
+    }
+
+    public function test_start_available_after_approval(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+        ]);
+
+        // Approve first
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Approved, $task->state);
+
+        // Now start should work
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+    }
+
+    public function test_approve_creates_audit_event(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('approveTask', $task->id);
+
+        $this->assertDatabaseHas('state_change_histories', [
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => 'added',
+            'to_state' => 'approved',
+            'changed_by' => $supervisor->id,
+        ]);
+    }
+
+    public function test_awaiting_approval_shown_for_unauthorized_user(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals,
+            'name' => 'Pending Approval Task',
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->assertSee('Awaiting Approval');
+    }
+
+    // ─── CM-TASK-003: Start a Task ─────────────────────────────
+
+    public function test_start_added_goal_task(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+        $this->assertEquals($this->user->id, $task->started_by);
+        $this->assertNotNull($task->started_at);
+    }
+
+    public function test_start_approved_task(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Approved,
+            'type' => TaskType::Referrals,
+            'approved_by' => $this->user->id,
+            'approved_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+        $this->assertEquals($this->user->id, $task->started_by);
+    }
+
+    public function test_start_blocked_when_approval_pending(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Referrals, // requires approval
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Added, $task->state); // unchanged
+    }
+
+    public function test_start_is_immutable_no_unstart(): void
+    {
+        $component = Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member]);
+
+        $this->assertFalse(method_exists($component->instance(), 'unstartTask'));
+    }
+
+    public function test_concurrent_starts_under_same_problem(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task1 = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+            'name' => 'Task One',
+        ]);
+
+        $task2 = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+            'name' => 'Task Two',
+        ]);
+
+        $component = Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member]);
+
+        $component->call('startTask', $task1->id);
+        $component->call('startTask', $task2->id);
+
+        $task1->refresh();
+        $task2->refresh();
+        $this->assertEquals(TaskState::Started, $task1->state);
+        $this->assertEquals(TaskState::Started, $task2->state);
+    }
+
+    public function test_start_creates_audit_event(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $this->assertDatabaseHas('state_change_histories', [
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => 'added',
+            'to_state' => 'started',
+            'changed_by' => $this->user->id,
+        ]);
+    }
+
+    public function test_start_notifies_lead_care_manager(): void
+    {
+        Notification::fake();
+
+        $leadCm = User::factory()->create();
+        $memberWithLead = Member::factory()->create(['lead_care_manager' => $leadCm->id]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $memberWithLead->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $memberWithLead])
+            ->call('startTask', $task->id);
+
+        Notification::assertSentTo($leadCm, TaskStartedNotification::class);
+    }
+
+    public function test_add_resource_available_after_start(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Added,
+            'type' => TaskType::Goal,
+        ]);
+
+        // Start the task
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->call('startTask', $task->id);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+
+        // Now add resource should work
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('resourceTaskId', $task->id)
+            ->set('surveyName', 'Post-Start Resource')
+            ->set('atHome', 'same')
+            ->set('atWork', 'better')
+            ->set('atPlay', 'worse')
+            ->call('saveResource');
+
+        $this->assertDatabaseHas('resources', [
+            'task_id' => $task->id,
+            'survey_name' => 'Post-Start Resource',
+        ]);
+    }
+
+    // ─── CM-TASK-004: Complete a Task ───────────────────────────
+
+    public function test_complete_task_with_completed_reason(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', 'completed')
+            ->call('completeTask');
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Completed, $task->state);
+        $this->assertEquals(TaskCompletionType::Completed, $task->completion_type);
+        $this->assertEquals($this->user->id, $task->completed_by);
+        $this->assertNotNull($task->completed_at);
+    }
+
+    public function test_complete_task_with_cancelled_reason(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', 'cancelled')
+            ->call('completeTask');
+
+        $task->refresh();
+        $this->assertEquals(TaskCompletionType::Cancelled, $task->completion_type);
+    }
+
+    public function test_complete_task_with_terminated_reason(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', 'terminated')
+            ->call('completeTask');
+
+        $task->refresh();
+        $this->assertEquals(TaskCompletionType::Terminated, $task->completion_type);
+    }
+
+    public function test_complete_requires_reason(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', '')
+            ->call('completeTask')
+            ->assertHasErrors(['completionReason']);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+    }
+
+    public function test_resource_addable_after_task_completed(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('resourceTaskId', $task->id)
+            ->set('surveyName', 'Post-Complete Resource')
+            ->set('atHome', 'same')
+            ->set('atWork', 'better')
+            ->set('atPlay', 'worse')
+            ->call('saveResource');
+
+        $this->assertDatabaseHas('resources', [
+            'task_id' => $task->id,
+            'survey_name' => 'Post-Complete Resource',
+        ]);
+    }
+
+    public function test_complete_creates_audit_event(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', 'completed')
+            ->call('completeTask');
+
+        $this->assertDatabaseHas('state_change_histories', [
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => 'started',
+            'to_state' => 'completed',
+            'changed_by' => $this->user->id,
+        ]);
+    }
+
+    public function test_complete_notifies_lead_care_manager(): void
+    {
+        Notification::fake();
+
+        $leadCm = User::factory()->create();
+        $memberWithLead = Member::factory()->create(['lead_care_manager' => $leadCm->id]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $memberWithLead->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $memberWithLead])
+            ->set('completeTaskId', $task->id)
+            ->set('completionReason', 'completed')
+            ->call('completeTask');
+
+        Notification::assertSentTo($leadCm, TaskCompletedNotification::class);
+    }
+
+    public function test_completed_task_shows_reason_badge(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Cancelled,
+            'name' => 'Cancelled Task',
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->assertSee('Complete – Task cancelled');
+    }
+
+    // ─── CM-TASK-005: Uncomplete a Task ─────────────────────────
+
+    public function test_supervisor_can_uncomplete_task_with_note(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', 'Task was completed in error')
+            ->call('uncompleteTask');
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Started, $task->state);
+        $this->assertNull($task->completion_type);
+        $this->assertNull($task->completed_by);
+        $this->assertNull($task->completed_at);
+    }
+
+    public function test_care_manager_cannot_uncomplete_task(): void
+    {
+        $careManager = User::factory()->create(['role' => UserRole::CareManager]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($careManager)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', 'Should not work')
+            ->call('uncompleteTask');
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Completed, $task->state);
+    }
+
+    public function test_uncomplete_requires_note(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', '')
+            ->call('uncompleteTask')
+            ->assertHasErrors(['uncompleteTaskNote']);
+
+        $task->refresh();
+        $this->assertEquals(TaskState::Completed, $task->state);
+    }
+
+    public function test_cascade_completed_task_cannot_be_uncompleted(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::ProblemUnconfirmed,
+        ]);
+
+        // Policy should deny — cascade-completed tasks use reactivation instead
+        $this->assertFalse($supervisor->can('uncomplete', $task));
+    }
+
+    public function test_cascade_resolved_task_cannot_be_uncompleted(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::ProblemResolved,
+        ]);
+
+        $this->assertFalse($supervisor->can('uncomplete', $task));
+    }
+
+    public function test_uncomplete_creates_audit_event(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', 'Audit test note')
+            ->call('uncompleteTask');
+
+        $this->assertDatabaseHas('state_change_histories', [
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => 'completed',
+            'to_state' => 'started',
+            'changed_by' => $supervisor->id,
+        ]);
+    }
+
+    public function test_uncomplete_creates_mandatory_note(): void
+    {
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', 'Error in completion')
+            ->call('uncompleteTask');
+
+        $this->assertDatabaseHas('notes', [
+            'notable_type' => Task::class,
+            'notable_id' => $task->id,
+            'content' => 'Error in completion',
+            'created_by' => $supervisor->id,
+        ]);
+    }
+
+    public function test_uncomplete_notifies_lead_care_manager(): void
+    {
+        Notification::fake();
+
+        $supervisor = User::factory()->create(['role' => UserRole::Supervisor]);
+        $leadCm = User::factory()->create();
+        $memberWithLead = Member::factory()->create(['lead_care_manager' => $leadCm->id]);
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $memberWithLead->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $task = Task::factory()->completed()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'completion_type' => TaskCompletionType::Completed,
+        ]);
+
+        Livewire::actingAs($supervisor)
+            ->test(CareManagementIndex::class, ['member' => $memberWithLead])
+            ->set('uncompleteTaskId', $task->id)
+            ->set('uncompleteTaskNote', 'Notification test')
+            ->call('uncompleteTask');
+
+        Notification::assertSentTo($leadCm, TaskUncompletedNotification::class, function ($notification) {
+            return $notification->note === 'Notification test';
+        });
+    }
+
+    public function test_task_with_optional_fields_empty(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', TaskType::Action->value)
+            ->set('taskName', 'Minimal task')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Minimal task')->first();
+        $this->assertNotNull($task);
+        $this->assertNull($task->code);
+        $this->assertNull($task->provider);
+        $this->assertNull($task->task_date);
+        $this->assertNull($task->due_date);
     }
 }

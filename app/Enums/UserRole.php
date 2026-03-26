@@ -58,4 +58,22 @@ enum UserRole: string
             self::Admin,
         ]);
     }
+
+    public function canUncompleteTask(): bool
+    {
+        return in_array($this, [
+            self::Supervisor,
+            self::AuthorizedClinician,
+            self::Admin,
+        ]);
+    }
+
+    public function canApproveTask(): bool
+    {
+        return in_array($this, [
+            self::Supervisor,
+            self::AuthorizedClinician,
+            self::Admin,
+        ]);
+    }
 }

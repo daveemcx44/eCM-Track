@@ -46,6 +46,9 @@ class CareManagementIndex extends Component
     public string $taskName = '';
     public string $taskCode = '';
     public string $taskEncounterSetting = '';
+    public string $taskProvider = '';
+    public ?string $taskDate = null;
+    public ?string $taskDueDate = null;
 
     // ─── Add Resource Modal ──────────────────────────────────
     public ?int $resourceTaskId = null;
@@ -61,6 +64,14 @@ class CareManagementIndex extends Component
     // ─── Unresolve Modal ──────────────────────────────────────
     public ?int $unresolveProblemId = null;
     public string $unresolveNote = '';
+
+    // ─── Complete Task Modal ──────────────────────────────────
+    public ?int $completeTaskId = null;
+    public string $completionReason = '';
+
+    // ─── Uncomplete Task Modal ────────────────────────────────
+    public ?int $uncompleteTaskId = null;
+    public string $uncompleteTaskNote = '';
 
     // ─── Filters & Search ─────────────────────────────────────
     public string $search = '';
@@ -418,7 +429,7 @@ class CareManagementIndex extends Component
     public function openAddTaskModal(int $problemId): void
     {
         $this->taskProblemId = $problemId;
-        $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting']);
+        $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
     }
 
     public function saveTask(): void
@@ -428,6 +439,9 @@ class CareManagementIndex extends Component
             'taskName' => 'required|string|max:255',
             'taskCode' => 'nullable|string|max:50',
             'taskEncounterSetting' => 'nullable|string',
+            'taskProvider' => 'nullable|string|max:255',
+            'taskDate' => 'nullable|date',
+            'taskDueDate' => 'nullable|date',
             'taskProblemId' => 'required|exists:problems,id',
         ]);
 
@@ -440,33 +454,143 @@ class CareManagementIndex extends Component
             return;
         }
 
-        Task::create([
+        $task = Task::create([
             'problem_id' => $this->taskProblemId,
             'name' => $this->taskName,
             'type' => $this->taskType,
             'code' => $this->taskCode ?: null,
             'encounter_setting' => $this->taskEncounterSetting ?: null,
+            'provider' => $this->taskProvider ?: null,
+            'task_date' => $this->taskDate ?: null,
+            'due_date' => $this->taskDueDate ?: null,
             'state' => TaskState::Added,
             'submitted_by' => auth()->id(),
             'submitted_at' => now(),
         ]);
 
+        // Audit event: TASK_ADDED
+        StateChangeHistory::create([
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => null,
+            'to_state' => TaskState::Added->value,
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'TASK_ADDED',
+                'problem_id' => $this->taskProblemId,
+                'member_id' => $problem->member_id,
+            ],
+        ]);
+
+        // Notify lead care manager
+        $member = $problem->member;
+        if ($member->lead_care_manager) {
+            $leadCm = User::find($member->lead_care_manager);
+            $leadCm?->notify(new \App\Notifications\TaskAddedNotification($task));
+        }
+
         $this->taskProblemId = null;
-        $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting']);
+        $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
+        unset($this->problems);
+    }
+
+    public function approveTask(int $taskId): void
+    {
+        $task = Task::findOrFail($taskId);
+
+        if (!auth()->user()->can('approve', $task)) {
+            session()->flash('error', 'You do not have permission to approve this task.');
+            return;
+        }
+
+        app(StateMachineService::class)->approveTask($task, auth()->user());
         unset($this->problems);
     }
 
     public function startTask(int $taskId): void
     {
         $task = Task::findOrFail($taskId);
+
+        // Block start if task requires approval and hasn't been approved
+        if ($task->state === TaskState::Added && $task->type->requiresApproval()) {
+            session()->flash('error', 'This task requires approval before it can be started.');
+            return;
+        }
+
         app(StateMachineService::class)->startTask($task, auth()->user());
+
+        // Notify lead care manager
+        $member = $task->problem->member;
+        if ($member->lead_care_manager) {
+            $leadCm = User::find($member->lead_care_manager);
+            $leadCm?->notify(new \App\Notifications\TaskStartedNotification($task->fresh()));
+        }
+
         unset($this->problems);
     }
 
-    public function completeTask(int $taskId): void
+    public function openCompleteTaskModal(int $taskId): void
     {
-        $task = Task::findOrFail($taskId);
-        app(StateMachineService::class)->completeTask($task, auth()->user(), TaskCompletionType::Completed);
+        $this->completeTaskId = $taskId;
+        $this->completionReason = '';
+    }
+
+    public function completeTask(): void
+    {
+        $this->validate([
+            'completionReason' => 'required|string|in:completed,cancelled,terminated',
+            'completeTaskId' => 'required|exists:tasks,id',
+        ]);
+
+        $task = Task::findOrFail($this->completeTaskId);
+        $completionType = TaskCompletionType::from($this->completionReason);
+
+        app(StateMachineService::class)->completeTask($task, auth()->user(), $completionType);
+
+        // Notify lead care manager
+        $member = $task->problem->member;
+        if ($member->lead_care_manager) {
+            $leadCm = User::find($member->lead_care_manager);
+            $leadCm?->notify(new \App\Notifications\TaskCompletedNotification($task->fresh()));
+        }
+
+        $this->reset(['completeTaskId', 'completionReason']);
+        unset($this->problems);
+    }
+
+    public function openUncompleteTaskModal(int $taskId): void
+    {
+        $this->uncompleteTaskId = $taskId;
+        $this->uncompleteTaskNote = '';
+    }
+
+    public function uncompleteTask(): void
+    {
+        $this->validate([
+            'uncompleteTaskNote' => 'required|string|min:1',
+            'uncompleteTaskId' => 'required|exists:tasks,id',
+        ], [
+            'uncompleteTaskNote.required' => 'An explanatory note is required to uncomplete a task.',
+        ]);
+
+        $task = Task::findOrFail($this->uncompleteTaskId);
+
+        if (!auth()->user()->can('uncomplete', $task)) {
+            session()->flash('error', 'You do not have permission to uncomplete this task.');
+            return;
+        }
+
+        $note = $this->uncompleteTaskNote;
+        app(StateMachineService::class)->uncompleteTask($task, auth()->user(), $note);
+
+        // Notify lead care manager
+        $member = $task->problem->member;
+        if ($member->lead_care_manager) {
+            $leadCm = User::find($member->lead_care_manager);
+            $leadCm?->notify(new \App\Notifications\TaskUncompletedNotification($task->fresh(), $note));
+        }
+
+        $this->reset(['uncompleteTaskId', 'uncompleteTaskNote']);
         unset($this->problems);
     }
 
