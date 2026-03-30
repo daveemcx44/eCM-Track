@@ -9,6 +9,7 @@ use App\Enums\TaskType;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -78,6 +79,16 @@ class Task extends Model
     public function completedByUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'completed_by');
+    }
+
+    public function goals(): BelongsToMany
+    {
+        return $this->belongsToMany(Task::class, 'goal_task', 'task_id', 'goal_id')->withTimestamps();
+    }
+
+    public function associatedTasks(): BelongsToMany
+    {
+        return $this->belongsToMany(Task::class, 'goal_task', 'goal_id', 'task_id')->withTimestamps();
     }
 
     public function isGoal(): bool

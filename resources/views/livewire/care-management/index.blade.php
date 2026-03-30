@@ -28,7 +28,7 @@
     },
     isExpanded(id) { return this.expanded.includes(id) },
     isTaskExpanded(id) { return this.taskExpanded.includes(id) }
-}" @show-reactivation-dialog.window="reactivationProblemId = $event.detail.problemId; reactivationTaskCount = $event.detail.taskCount; showReactivationDialog = true" @show-resolve-reactivation-dialog.window="resolveReactivationProblemId = $event.detail.problemId; resolveReactivationTaskCount = $event.detail.taskCount; showResolveReactivationDialog = true">
+}" @show-reactivation-dialog.window="reactivationProblemId = $event.detail.problemId; reactivationTaskCount = $event.detail.taskCount; showReactivationDialog = true" @show-resolve-reactivation-dialog.window="resolveReactivationProblemId = $event.detail.problemId; resolveReactivationTaskCount = $event.detail.taskCount; showResolveReactivationDialog = true" >
     <x-slot name="header">Care Management</x-slot>
 
     @if($jiConsentBlocked)
@@ -100,7 +100,46 @@
                 @if($this->hasActiveFilters)
                 <button type="button" wire:click="clearAllFilters" class="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium whitespace-nowrap">Clear filters</button>
                 @endif
+                <div class="flex gap-1 ml-auto">
+                    <button type="button" wire:click="switchView('ptr')" @class(['px-3 py-1.5 text-xs font-medium rounded-md transition', 'bg-indigo-600 text-white' => $viewMode === 'ptr', 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200' => $viewMode !== 'ptr'])>PTR View</button>
+                    <button type="button" wire:click="switchView('goal')" @class(['px-3 py-1.5 text-xs font-medium rounded-md transition', 'bg-indigo-600 text-white' => $viewMode === 'goal', 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200' => $viewMode !== 'goal'])>Goal View</button>
+                </div>
             </div>
+
+            @if($viewMode === 'goal')
+            {{-- ══════ Goal View (Read-Only) ══════ --}}
+            <table class="w-full table-fixed">
+                <thead>
+                    <tr class="border-b-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                        <th class="w-[40%] px-5 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Goal</th>
+                        <th class="w-[30%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Associated Task</th>
+                        <th class="w-[15%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Problem</th>
+                        <th class="w-[15%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700/50">
+                    @forelse($this->goals as $goal)
+                        <tr class="bg-indigo-50 dark:bg-indigo-900/20 border-t-2 border-gray-200 dark:border-gray-600 first:border-t-0">
+                            <td class="px-5 py-3.5 text-sm font-semibold text-indigo-700 dark:text-indigo-300">{{ $goal->name }}</td>
+                            <td class="px-4 py-3.5"></td>
+                            <td class="px-4 py-3.5 text-sm text-gray-500 dark:text-gray-400">{{ $goal->problem->name }}</td>
+                            <td class="px-4 py-3.5"><span @class(['px-2.5 py-1 rounded-full text-xs font-semibold', 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' => $goal->state === \App\Enums\TaskState::Added, 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' => $goal->state === \App\Enums\TaskState::Started, 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' => $goal->state === \App\Enums\TaskState::Completed])>{{ ucfirst($goal->state->value) }}</span></td>
+                        </tr>
+                        @foreach($goal->associatedTasks as $assocTask)
+                        <tr class="bg-gray-50 dark:bg-gray-700/30">
+                            <td class="pl-12 py-2.5 text-sm text-gray-400 select-none">↳</td>
+                            <td class="px-4 py-2.5 text-sm text-gray-700 dark:text-gray-300">{{ $assocTask->name }}</td>
+                            <td class="px-4 py-2.5 text-sm text-gray-500 dark:text-gray-400">{{ $assocTask->problem->name ?? '' }}</td>
+                            <td class="px-4 py-2.5"><span @class(['px-2.5 py-1 rounded-full text-xs font-semibold', 'bg-yellow-100 text-yellow-700' => $assocTask->state === \App\Enums\TaskState::Added, 'bg-blue-100 text-blue-700' => $assocTask->state === \App\Enums\TaskState::Approved, 'bg-green-100 text-green-700' => $assocTask->state === \App\Enums\TaskState::Started, 'bg-gray-100 text-gray-700' => $assocTask->state === \App\Enums\TaskState::Completed])>{{ ucfirst($assocTask->state->value) }}</span></td>
+                        </tr>
+                        @endforeach
+                    @empty
+                        <tr><td colspan="4" class="px-6 py-12 text-center text-gray-400 dark:text-gray-500 text-sm">No goals found for this member.</td></tr>
+                    @endforelse
+                </tbody>
+            </table>
+            @else
+            {{-- ══════ PTR View ══════ --}}
             <table class="w-full table-fixed">
                 <thead>
                     <tr class="border-b-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
@@ -205,7 +244,11 @@
                                         @elseif($task->state === \App\Enums\TaskState::Added || $task->state === \App\Enums\TaskState::Approved)
                                             <button type="button" wire:click="startTask({{ $task->id }})" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-green-500 text-white hover:bg-green-600 transition shadow-sm">Start</button>
                                         @elseif($task->state === \App\Enums\TaskState::Started)
-                                            <button type="button" wire:click="openCompleteTaskModal({{ $task->id }})" @click="showCompleteTaskModal = true" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition shadow-sm">Complete</button>
+                                            @if($task->isGoal())
+                                                <button type="button" wire:click="openCompleteGoalModal({{ $task->id }})" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition shadow-sm">Complete</button>
+                                            @else
+                                                <button type="button" wire:click="openCompleteTaskModal({{ $task->id }})" @click="showCompleteTaskModal = true" class="px-3.5 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 transition shadow-sm">Complete</button>
+                                            @endif
                                         @endif
                                         <button type="button" wire:click="$dispatch('open-task-detail', { taskId: {{ $task->id }} })" title="Click to view Task Details" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold bg-indigo-100 text-indigo-600 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 transition shrink-0">?</button>
                                         @if(($task->state === \App\Enums\TaskState::Started || $task->state === \App\Enums\TaskState::Completed) && !in_array($task->completion_type, [\App\Enums\TaskCompletionType::ProblemUnconfirmed, \App\Enums\TaskCompletionType::ProblemResolved]))
@@ -255,6 +298,7 @@
             <div class="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
                 {{ $this->problems->links() }}
             </div>
+            @endif
         </div>
     </div>
 
@@ -338,7 +382,13 @@
                         <select id="taskType" wire:model.live="taskType" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm">
                             <option value="">{{ __('Enter Task Type') }}</option>
                             @foreach(\App\Enums\TaskType::cases() as $tt)
-                                <option value="{{ $tt->value }}">{{ $tt->label() }}</option>
+                                @if($tt === \App\Enums\TaskType::Goal)
+                                    @if(auth()->user()->role?->canCreateGoal())
+                                        <option value="{{ $tt->value }}">{{ $tt->label() }}</option>
+                                    @endif
+                                @else
+                                    <option value="{{ $tt->value }}">{{ $tt->label() }}</option>
+                                @endif
                             @endforeach
                         </select>
                         <x-input-error for="taskType" class="mt-2" />
@@ -383,13 +433,27 @@
                     <div class="text-xs text-gray-500 dark:text-gray-400 italic">
                         This task type may require approval before it can be started.
                     </div>
+                    @php $availableGoals = $this->getAvailableGoals(); @endphp
+                    @if(count($availableGoals) > 0)
+                    <div>
+                        <x-label value="{{ __('Associate with Goals (optional)') }}" />
+                        <div class="mt-2 space-y-2 max-h-32 overflow-y-auto">
+                            @foreach($availableGoals as $goalId => $goalName)
+                            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                <input type="checkbox" wire:model="selectedGoals" value="{{ $goalId }}" class="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                                {{ $goalName }}
+                            </label>
+                            @endforeach
+                        </div>
+                    </div>
+                    @endif
                     @endif
                     <x-input-error for="taskProblemId" class="mt-2" />
                 </div>
             </div>
             <div class="flex justify-end px-6 py-4 bg-gray-100 dark:bg-gray-700">
                 <x-secondary-button type="button" @click="showAddTaskModal = false">{{ __('Cancel') }}</x-secondary-button>
-                <x-button class="ms-3" wire:click="saveTask" @click="showAddTaskModal = false">{{ __('Add Task') }}</x-button>
+                <x-button class="ms-3" wire:click="saveTask" x-on:click="showAddTaskModal = false" wire:loading.attr="disabled">{{ __('Add Task') }}</x-button>
             </div>
         </div>
     </div>
@@ -565,6 +629,60 @@
             </div>
         </div>
     </div>
+
+    {{-- Goal Completion Confirmation Dialog --}}
+    @if($completeGoalId)
+    <div class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50">
+        <div class="fixed inset-0" wire:click="cancelCompleteGoal"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative">
+            <div class="px-6 py-5">
+                <p class="text-base font-medium text-gray-900 dark:text-gray-100">{{ __('Complete Goal with Incomplete Tasks?') }}</p>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">The following associated tasks are still incomplete:</p>
+                <ul class="mt-3 space-y-1">
+                    @foreach($incompleteGoalTasks as $it)
+                    <li class="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0"></span>
+                        {{ $it['name'] }} <span class="text-xs text-gray-400">({{ ucfirst($it['state']) }})</span>
+                    </li>
+                    @endforeach
+                </ul>
+                <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">These tasks will remain in their current state.</p>
+            </div>
+            <div class="flex justify-end gap-3 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" wire:click="cancelCompleteGoal">{{ __('Cancel') }}</x-secondary-button>
+                <x-button type="button" wire:click="confirmCompleteGoal">{{ __('Complete Anyway') }}</x-button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Retroactive Goal Association Dialog --}}
+    @if($newGoalId)
+    <div class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50">
+        <div class="fixed inset-0" wire:click="skipRetroactiveAssociations"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-lg sm:mx-auto relative">
+            <div class="px-6 py-4">
+                <div class="text-lg font-medium text-gray-900 dark:text-gray-100">{{ __('Associate Existing Tasks with Goal') }}</div>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Select tasks to associate with the newly created Goal. You can skip this and associate tasks later.</p>
+                <div class="mt-4 space-y-2 max-h-60 overflow-y-auto">
+                    @php $retroTasks = $this->getRetroactiveTasks(); @endphp
+                    @forelse($retroTasks as $taskId => $taskName)
+                    <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 py-1">
+                        <input type="checkbox" wire:model="retroactiveTaskIds" value="{{ $taskId }}" class="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                        {{ $taskName }}
+                    </label>
+                    @empty
+                    <p class="text-sm text-gray-400">No existing tasks found.</p>
+                    @endforelse
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" wire:click="skipRetroactiveAssociations">{{ __('Skip') }}</x-secondary-button>
+                <x-button type="button" wire:click="saveRetroactiveAssociations">{{ __('Associate Selected') }}</x-button>
+            </div>
+        </div>
+    </div>
+    @endif
 
     {{-- Detail modals --}}
     @livewire('care-management.problem-detail', ['memberId' => $member->id], key('problem-detail-' . $member->id))

@@ -73,6 +73,18 @@ class CareManagementIndex extends Component
     public ?int $uncompleteTaskId = null;
     public string $uncompleteTaskNote = '';
 
+    // ─── Goal Completion ─────────────────────────────────────
+    public ?int $completeGoalId = null;
+    public array $incompleteGoalTasks = [];
+
+    // ─── Goal Associations ─────────────────────────────────────
+    public array $selectedGoals = [];
+    public ?int $newGoalId = null;
+    public array $retroactiveTaskIds = [];
+
+    // ─── View Mode ──────────────────────────────────────────────
+    public string $viewMode = 'ptr'; // 'ptr' or 'goal'
+
     // ─── Filters & Search ─────────────────────────────────────
     public string $search = '';
     public string $statusFilter = '';
@@ -95,6 +107,20 @@ class CareManagementIndex extends Component
         $this->search = '';
         $this->statusFilter = '';
         $this->resetPage();
+    }
+
+    public function switchView(string $mode): void
+    {
+        $this->viewMode = $mode;
+    }
+
+    #[Computed]
+    public function goals()
+    {
+        return Task::whereHas('problem', fn ($q) => $q->where('member_id', $this->member->id))
+            ->where('type', TaskType::Goal)
+            ->with(['associatedTasks', 'problem'])
+            ->get();
     }
 
     public function updatedSearch(): void
@@ -454,6 +480,15 @@ class CareManagementIndex extends Component
             return;
         }
 
+        // CM staff restriction for Goal creation
+        if ($this->taskType === 'goal') {
+            $userRole = auth()->user()->role;
+            if (!$userRole || !$userRole->canCreateGoal()) {
+                $this->addError('taskType', 'Only Care Managers, Supervisors, or Admins can create Goals.');
+                return;
+            }
+        }
+
         $task = Task::create([
             'problem_id' => $this->taskProblemId,
             'name' => $this->taskName,
@@ -482,6 +517,11 @@ class CareManagementIndex extends Component
             ],
         ]);
 
+        // Associate task with selected goals
+        if (!empty($this->selectedGoals) && $this->taskType !== 'goal') {
+            $task->goals()->sync($this->selectedGoals);
+        }
+
         // Notify lead care manager
         $member = $problem->member;
         if ($member->lead_care_manager) {
@@ -489,7 +529,27 @@ class CareManagementIndex extends Component
             $leadCm?->notify(new \App\Notifications\TaskAddedNotification($task));
         }
 
+        // If a Goal was created, trigger retroactive association dialog
+        if ($this->taskType === 'goal') {
+            $existingTasks = Task::where('problem_id', $this->taskProblemId)
+                ->where('id', '!=', $task->id)
+                ->where('type', '!=', TaskType::Goal->value)
+                ->pluck('name', 'id')
+                ->toArray();
+
+            if (!empty($existingTasks)) {
+                $this->newGoalId = $task->id;
+                $this->retroactiveTaskIds = [];
+                $this->taskProblemId = null;
+                $this->selectedGoals = [];
+                $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
+                unset($this->problems);
+                return;
+            }
+        }
+
         $this->taskProblemId = null;
+        $this->selectedGoals = [];
         $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
         unset($this->problems);
     }
@@ -636,6 +696,144 @@ class CareManagementIndex extends Component
         $this->resourceTaskId = null;
         $this->reset(['surveyName', 'atHome', 'atWork', 'atPlay']);
         unset($this->problems);
+    }
+
+    // ─── Goal Methods ────────────────────────────────────────
+
+    public function openCompleteGoalModal(int $goalId): void
+    {
+        $goal = Task::where('type', TaskType::Goal)->findOrFail($goalId);
+        $incompleteTasks = $goal->associatedTasks()
+            ->where('state', '!=', TaskState::Completed->value)
+            ->get();
+
+        if ($incompleteTasks->isEmpty()) {
+            // All tasks complete — complete the goal directly
+            $this->completeGoalDirectly($goalId);
+            return;
+        }
+
+        // Show confirmation dialog with incomplete tasks
+        $this->completeGoalId = $goalId;
+        $this->incompleteGoalTasks = $incompleteTasks->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'state' => $t->state->value])->toArray();
+    }
+
+    public function confirmCompleteGoal(): void
+    {
+        if ($this->completeGoalId) {
+            $this->completeGoalDirectly($this->completeGoalId);
+            $this->completeGoalId = null;
+            $this->incompleteGoalTasks = [];
+        }
+    }
+
+    public function cancelCompleteGoal(): void
+    {
+        $this->completeGoalId = null;
+        $this->incompleteGoalTasks = [];
+    }
+
+    private function completeGoalDirectly(int $goalId): void
+    {
+        $goal = Task::findOrFail($goalId);
+        app(StateMachineService::class)->completeTask($goal, auth()->user(), TaskCompletionType::Completed);
+
+        $member = $goal->problem->member;
+        if ($member->lead_care_manager) {
+            $leadCm = User::find($member->lead_care_manager);
+            $leadCm?->notify(new \App\Notifications\TaskCompletedNotification($goal->fresh()));
+        }
+
+        unset($this->problems);
+        unset($this->goals);
+    }
+
+    public function getRetroactiveTasks(): array
+    {
+        if (!$this->newGoalId) {
+            return [];
+        }
+
+        $goal = Task::find($this->newGoalId);
+        if (!$goal) {
+            return [];
+        }
+
+        return Task::where('problem_id', $goal->problem_id)
+            ->where('id', '!=', $this->newGoalId)
+            ->where('type', '!=', TaskType::Goal->value)
+            ->pluck('name', 'id')
+            ->toArray();
+    }
+
+    public function saveRetroactiveAssociations(): void
+    {
+        if ($this->newGoalId && !empty($this->retroactiveTaskIds)) {
+            $goal = Task::where('type', TaskType::Goal)->findOrFail($this->newGoalId);
+
+            foreach ($this->retroactiveTaskIds as $taskId) {
+                $task = Task::findOrFail($taskId);
+                $task->goals()->syncWithoutDetaching([$this->newGoalId]);
+
+                StateChangeHistory::create([
+                    'trackable_type' => Task::class,
+                    'trackable_id' => $task->id,
+                    'from_state' => $task->state->value,
+                    'to_state' => $task->state->value,
+                    'changed_by' => auth()->id(),
+                    'metadata' => [
+                        'event' => 'TASK_GOAL_ASSOCIATED',
+                        'goal_id' => $this->newGoalId,
+                        'goal_name' => $goal->name,
+                    ],
+                ]);
+            }
+        }
+
+        $this->newGoalId = null;
+        $this->retroactiveTaskIds = [];
+        unset($this->goals);
+        unset($this->problems);
+    }
+
+    public function skipRetroactiveAssociations(): void
+    {
+        $this->newGoalId = null;
+        $this->retroactiveTaskIds = [];
+    }
+
+    public function associateTaskWithGoal(int $taskId, int $goalId): void
+    {
+        $task = Task::findOrFail($taskId);
+        $goal = Task::where('type', TaskType::Goal)->findOrFail($goalId);
+        $task->goals()->syncWithoutDetaching([$goalId]);
+
+        StateChangeHistory::create([
+            'trackable_type' => Task::class,
+            'trackable_id' => $task->id,
+            'from_state' => $task->state->value,
+            'to_state' => $task->state->value,
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'TASK_GOAL_ASSOCIATED',
+                'goal_id' => $goalId,
+                'goal_name' => $goal->name,
+            ],
+        ]);
+
+        unset($this->goals);
+    }
+
+    public function getAvailableGoals(): array
+    {
+        if (!$this->taskProblemId) {
+            return [];
+        }
+
+        return Task::whereHas('problem', fn ($q) => $q->where('member_id', $this->member->id))
+            ->where('type', TaskType::Goal)
+            ->pluck('name', 'id')
+            ->toArray();
     }
 
     // ─── Helpers ─────────────────────────────────────────────

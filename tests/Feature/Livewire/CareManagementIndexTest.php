@@ -2513,4 +2513,554 @@ class CareManagementIndexTest extends TestCase
         $this->assertNull($task->task_date);
         $this->assertNull($task->due_date);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CM-GOAL-001: Add a Goal
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_care_manager_can_create_goal(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Reduce Blood Pressure')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Reduce Blood Pressure')->first();
+        $this->assertNotNull($task);
+        $this->assertEquals(TaskType::Goal, $task->type);
+        $this->assertEquals(TaskState::Added, $task->state);
+    }
+
+    public function test_goal_skips_approval_step(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Goal should be startable directly from Added (no approval needed)
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('startTask', $goal->id);
+
+        $goal->refresh();
+        $this->assertEquals(TaskState::Started, $goal->state);
+    }
+
+    public function test_non_cm_staff_cannot_create_goal(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CommunityHealthWorker]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'My Goal')
+            ->call('saveTask')
+            ->assertHasErrors('taskType');
+
+        $this->assertNull(Task::where('name', 'My Goal')->first());
+    }
+
+    public function test_authorized_clinician_cannot_create_goal(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::AuthorizedClinician]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Clinician Goal')
+            ->call('saveTask')
+            ->assertHasErrors('taskType');
+    }
+
+    public function test_supervisor_can_create_goal(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::Supervisor]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Supervisor Goal')
+            ->call('saveTask');
+
+        $this->assertNotNull(Task::where('name', 'Supervisor Goal')->first());
+    }
+
+    public function test_goal_is_immutable_no_delete(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Goals cannot be deleted — soft delete should not be triggered
+        $this->assertNull($goal->deleted_at);
+        $this->assertTrue(Task::where('id', $goal->id)->exists());
+    }
+
+    public function test_goal_creation_writes_audit_event(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Audit Goal')
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Audit Goal')->first();
+        $audit = StateChangeHistory::where('trackable_type', Task::class)
+            ->where('trackable_id', $task->id)
+            ->first();
+
+        $this->assertNotNull($audit);
+        $this->assertEquals('TASK_ADDED', $audit->metadata['event']);
+    }
+
+    public function test_goal_appears_in_goal_view(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('switchView', 'goal')
+            ->assertSee($goal->name);
+    }
+
+    public function test_goal_task_association(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        // Create a goal
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Create a task associated with the goal
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'referrals')
+            ->set('taskName', 'Associated Referral')
+            ->set('selectedGoals', [$goal->id])
+            ->call('saveTask');
+
+        $task = Task::where('name', 'Associated Referral')->first();
+        $this->assertNotNull($task);
+        $this->assertTrue($task->goals->contains($goal->id));
+    }
+
+    public function test_goal_view_is_read_only(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+        Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Goal view should show the goal but in read-only mode
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('switchView', 'goal');
+
+        $component->assertSet('viewMode', 'goal');
+    }
+
+    public function test_associate_task_with_goal_method(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+        $task = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('associateTaskWithGoal', $task->id, $goal->id);
+
+        $this->assertTrue($task->fresh()->goals->contains($goal->id));
+        $this->assertTrue($goal->fresh()->associatedTasks->contains($task->id));
+    }
+
+    public function test_task_can_be_linked_to_multiple_goals(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal1 = Task::factory()->for($problem)->goal()->create([
+            'name' => 'Goal A',
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+        $goal2 = Task::factory()->for($problem)->goal()->create([
+            'name' => 'Goal B',
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+        $task = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member]);
+
+        $component->call('associateTaskWithGoal', $task->id, $goal1->id);
+        $component->call('associateTaskWithGoal', $task->id, $goal2->id);
+
+        $task->refresh();
+        $this->assertCount(2, $task->goals);
+        $this->assertTrue($task->goals->contains($goal1->id));
+        $this->assertTrue($task->goals->contains($goal2->id));
+    }
+
+    public function test_goal_association_writes_audit_event(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+        ]);
+        $task = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('associateTaskWithGoal', $task->id, $goal->id);
+
+        $audit = StateChangeHistory::where('trackable_type', Task::class)
+            ->where('trackable_id', $task->id)
+            ->where('metadata->event', 'TASK_GOAL_ASSOCIATED')
+            ->first();
+
+        $this->assertNotNull($audit);
+        $this->assertEquals($goal->id, $audit->metadata['goal_id']);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CM-GOAL-004: Retroactive Goal Association
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_retroactive_dialog_triggers_after_goal_creation_with_existing_tasks(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        // Create an existing task first
+        Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Create a Goal — should trigger retroactive dialog
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'New Goal')
+            ->call('saveTask');
+
+        // Goal should be created
+        $goal = Task::where('name', 'New Goal')->where('type', 'goal')->first();
+        $this->assertNotNull($goal);
+
+        // newGoalId should be set for the retroactive dialog
+        $component->assertSet('newGoalId', $goal->id);
+    }
+
+    public function test_retroactive_association_links_selected_tasks(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $existingTask = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'name' => 'Existing Referral',
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        // Create Goal
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Retroactive Goal')
+            ->call('saveTask');
+
+        $goal = Task::where('name', 'Retroactive Goal')->first();
+
+        // Simulate selecting tasks and confirming
+        $component->set('retroactiveTaskIds', [$existingTask->id])
+            ->call('saveRetroactiveAssociations');
+
+        $this->assertTrue($existingTask->fresh()->goals->contains($goal->id));
+        $component->assertSet('newGoalId', null);
+    }
+
+    public function test_skip_retroactive_saves_goal_with_no_associations(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Added,
+            'submitted_by' => $user->id,
+        ]);
+
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Skipped Goal')
+            ->call('saveTask');
+
+        $goal = Task::where('name', 'Skipped Goal')->first();
+        $this->assertNotNull($goal);
+
+        // Skip the dialog
+        $component->call('skipRetroactiveAssociations');
+
+        $this->assertCount(0, $goal->fresh()->associatedTasks);
+        $component->assertSet('newGoalId', null);
+    }
+
+    public function test_no_retroactive_dialog_when_no_existing_tasks(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        // No existing tasks — create Goal directly
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->set('taskProblemId', $problem->id)
+            ->set('taskType', 'goal')
+            ->set('taskName', 'Solo Goal')
+            ->call('saveTask');
+
+        $goal = Task::where('name', 'Solo Goal')->first();
+        $this->assertNotNull($goal);
+
+        // No dialog — newGoalId should remain null
+        $component->assertSet('newGoalId', null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CM-GOAL-005: Complete a Goal
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_goal_completes_directly_when_all_tasks_complete(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'started_by' => $user->id,
+            'started_at' => now(),
+            'submitted_by' => $user->id,
+        ]);
+
+        // Associate a completed task
+        $task = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Completed,
+            'submitted_by' => $user->id,
+            'completed_by' => $user->id,
+            'completed_at' => now(),
+        ]);
+        $task->goals()->attach($goal->id);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('openCompleteGoalModal', $goal->id);
+
+        // Should complete directly without dialog
+        $goal->refresh();
+        $this->assertEquals(TaskState::Completed, $goal->state);
+        $this->assertEquals($user->id, $goal->completed_by);
+    }
+
+    public function test_goal_shows_confirmation_when_incomplete_tasks(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'started_by' => $user->id,
+            'started_at' => now(),
+            'submitted_by' => $user->id,
+        ]);
+
+        $incompleteTask = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'name' => 'Incomplete Referral',
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+            'started_by' => $user->id,
+            'started_at' => now(),
+        ]);
+        $incompleteTask->goals()->attach($goal->id);
+
+        $component = Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('openCompleteGoalModal', $goal->id);
+
+        // Should show dialog, not complete yet
+        $component->assertSet('completeGoalId', $goal->id);
+        $this->assertNotEmpty($component->get('incompleteGoalTasks'));
+        $goal->refresh();
+        $this->assertEquals(TaskState::Started, $goal->state);
+    }
+
+    public function test_goal_completes_despite_incomplete_tasks_on_confirm(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'started_by' => $user->id,
+            'started_at' => now(),
+            'submitted_by' => $user->id,
+        ]);
+
+        $incompleteTask = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+            'started_by' => $user->id,
+            'started_at' => now(),
+        ]);
+        $incompleteTask->goals()->attach($goal->id);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('openCompleteGoalModal', $goal->id)
+            ->call('confirmCompleteGoal');
+
+        // Goal completed, incomplete task unchanged
+        $goal->refresh();
+        $incompleteTask->refresh();
+        $this->assertEquals(TaskState::Completed, $goal->state);
+        $this->assertEquals(TaskState::Started, $incompleteTask->state);
+    }
+
+    public function test_goal_completion_writes_audit_event(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'started_by' => $user->id,
+            'started_at' => now(),
+            'submitted_by' => $user->id,
+        ]);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('openCompleteGoalModal', $goal->id);
+
+        $audit = StateChangeHistory::where('trackable_type', Task::class)
+            ->where('trackable_id', $goal->id)
+            ->where('to_state', TaskState::Completed->value)
+            ->first();
+
+        $this->assertNotNull($audit);
+    }
+
+    public function test_cancel_complete_goal_does_not_change_state(): void
+    {
+        $user = User::factory()->create(['role' => UserRole::CareManager]);
+        $member = Member::factory()->create();
+        $problem = Problem::factory()->for($member)->create(['state' => ProblemState::Confirmed]);
+
+        $goal = Task::factory()->for($problem)->goal()->create([
+            'state' => TaskState::Started,
+            'started_by' => $user->id,
+            'started_at' => now(),
+            'submitted_by' => $user->id,
+        ]);
+
+        $incompleteTask = Task::factory()->for($problem)->create([
+            'type' => TaskType::Referrals,
+            'state' => TaskState::Started,
+            'submitted_by' => $user->id,
+            'started_by' => $user->id,
+            'started_at' => now(),
+        ]);
+        $incompleteTask->goals()->attach($goal->id);
+
+        Livewire::actingAs($user)
+            ->test(CareManagementIndex::class, ['member' => $member])
+            ->call('openCompleteGoalModal', $goal->id)
+            ->call('cancelCompleteGoal')
+            ->assertSet('completeGoalId', null);
+
+        $goal->refresh();
+        $this->assertEquals(TaskState::Started, $goal->state);
+    }
 }

@@ -76,4 +76,13 @@ enum UserRole: string
             self::Admin,
         ]);
     }
+
+    public function canCreateGoal(): bool
+    {
+        return in_array($this, [
+            self::CareManager,
+            self::Supervisor,
+            self::Admin,
+        ]);
+    }
 }
