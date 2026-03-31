@@ -9,17 +9,26 @@ use App\Enums\ResourceRating;
 use App\Enums\TaskCompletionType;
 use App\Enums\TaskState;
 use App\Enums\TaskType;
+use App\Enums\NotificationEventType;
+use App\Enums\ProblemClassification;
+use App\Enums\OutreachMethod;
+use App\Enums\OutreachOutcome;
+use App\Models\CarePlan;
 use App\Models\Member;
+use App\Models\OutreachLog;
+use App\Models\Note;
 use App\Models\Problem;
 use App\Models\Resource;
 use App\Models\Task;
 use App\Models\StateChangeHistory;
 use App\Models\User;
+use App\Notifications\NoteAddedNotification;
 use App\Notifications\ProblemAddedNotification;
 use App\Notifications\ProblemConfirmedNotification;
 use App\Notifications\ProblemResolvedNotification;
 use App\Notifications\ProblemUnconfirmedNotification;
 use App\Notifications\ProblemUnresolvedNotification;
+use App\Services\CareManagement\NotificationService;
 use App\Services\CareManagement\PtrValidationService;
 use App\Services\CareManagement\StateMachineService;
 use Livewire\Attributes\Computed;
@@ -82,8 +91,29 @@ class CareManagementIndex extends Component
     public ?int $newGoalId = null;
     public array $retroactiveTaskIds = [];
 
+    // ─── Add Note Modal ──────────────────────────────────────────
+    public ?string $noteEntityType = null;
+    public ?int $noteEntityId = null;
+    public string $noteContent = '';
+    public bool $noteNotify = false;
+
+    // ─── State Change History Modal ──────────────────────────────
+    public array $stateHistoryRecords = [];
+    public bool $showHistoryModal = false;
+    public ?string $historyEntityName = null;
+
     // ─── View Mode ──────────────────────────────────────────────
-    public string $viewMode = 'ptr'; // 'ptr' or 'goal'
+    public string $viewMode = 'ptr'; // 'ptr', 'goal', or 'care_plan'
+
+    // ─── Care Plan ────────────────────────────────────────────────
+    public ?int $selectedCarePlanId = null;
+    public ?int $carePlanFilter = null;
+
+    // ─── Outreach Modal ─────────────────────────────────────────
+    public string $outreachMethod = '';
+    public ?string $outreachDate = null;
+    public string $outreachOutcome = '';
+    public string $outreachNotes = '';
 
     // ─── Filters & Search ─────────────────────────────────────
     public string $search = '';
@@ -112,6 +142,49 @@ class CareManagementIndex extends Component
     public function switchView(string $mode): void
     {
         $this->viewMode = $mode;
+        if ($mode === 'care_plan' && !$this->selectedCarePlanId) {
+            // Auto-select the latest care plan
+            $latest = $this->member->carePlans()->latest('version_number')->first();
+            $this->selectedCarePlanId = $latest?->id;
+        }
+    }
+
+    public function selectCarePlan(?int $carePlanId): void
+    {
+        $this->selectedCarePlanId = $carePlanId;
+        $this->resetPage();
+    }
+
+    public function setCarePlanFilter(?int $carePlanId): void
+    {
+        $this->carePlanFilter = $carePlanId;
+        $this->resetPage();
+    }
+
+    #[Computed]
+    public function carePlans()
+    {
+        return $this->member->carePlans()->orderBy('version_number', 'desc')->get();
+    }
+
+    #[Computed]
+    public function carePlanSummary(): ?array
+    {
+        $latestPlan = $this->member->carePlans()->latest('version_number')->first();
+
+        if (!$latestPlan) {
+            return null;
+        }
+
+        return [
+            'assessment_type' => $latestPlan->assessment_type,
+            'assessment_date' => $latestPlan->assessment_date?->format('M j, Y'),
+            'next_reassessment_date' => $latestPlan->next_reassessment_date?->format('M j, Y'),
+            'is_overdue' => $latestPlan->isReassessmentOverdue(),
+            'risk_level' => $latestPlan->risk_level,
+            'version_count' => $this->member->carePlans()->count(),
+            'current_version' => $latestPlan->version_number,
+        ];
     }
 
     #[Computed]
@@ -160,6 +233,13 @@ class CareManagementIndex extends Component
             $query->where('state', $this->statusFilter);
         }
 
+        // Care plan filter (used in both PTR and Care Plan views)
+        if ($this->viewMode === 'care_plan' && $this->selectedCarePlanId) {
+            $query->where('care_plan_id', $this->selectedCarePlanId);
+        } elseif ($this->carePlanFilter) {
+            $query->where('care_plan_id', $this->carePlanFilter);
+        }
+
         return $query->paginate(10);
     }
 
@@ -188,6 +268,7 @@ class CareManagementIndex extends Component
             'submitted_by' => auth()->id(),
             'submitted_at' => now(),
             'lock_version' => 0,
+            'care_plan_id' => ($this->viewMode === 'care_plan' && $this->selectedCarePlanId) ? $this->selectedCarePlanId : null,
         ]);
 
         // Audit event: PROBLEM_ADDED
@@ -200,11 +281,10 @@ class CareManagementIndex extends Component
             'metadata' => ['event' => 'PROBLEM_ADDED'],
         ]);
 
-        // Notify lead care manager if assigned
-        if ($this->member->lead_care_manager) {
-            $leadCm = User::find($this->member->lead_care_manager);
-            $leadCm?->notify(new ProblemAddedNotification($problem));
-        }
+        // Notify lead care manager
+        app(NotificationService::class)->notifyLeadCareManager(
+            $this->member, NotificationEventType::ProblemAdded, new ProblemAddedNotification($problem)
+        );
 
         $this->reset(['problemType', 'problemName', 'problemCode', 'problemEncounterSetting']);
         unset($this->problems);
@@ -248,11 +328,9 @@ class CareManagementIndex extends Component
         }
 
         // Notify lead care manager
-        $member = $problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new ProblemConfirmedNotification($problem->fresh()));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $problem->member, NotificationEventType::ProblemConfirmed, new ProblemConfirmedNotification($problem->fresh())
+        );
 
         unset($this->problems);
     }
@@ -291,11 +369,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->unconfirmProblem($problem, auth()->user(), $note);
 
         // Notify lead care manager
-        $member = $problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new ProblemUnconfirmedNotification($problem->fresh(), $note));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $problem->member, NotificationEventType::ProblemUnconfirmed, new ProblemUnconfirmedNotification($problem->fresh(), $note)
+        );
 
         $this->reset(['unconfirmProblemId', 'unconfirmNote']);
         unset($this->problems);
@@ -355,11 +431,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->resolveProblem($problem, auth()->user());
 
         // Notify lead care manager
-        $member = $problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new ProblemResolvedNotification($problem->fresh()));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $problem->member, NotificationEventType::ProblemResolved, new ProblemResolvedNotification($problem->fresh())
+        );
 
         unset($this->problems);
     }
@@ -396,11 +470,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->unresolveProblem($problem, auth()->user(), $note);
 
         // Notify lead care manager
-        $member = $problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new ProblemUnresolvedNotification($problem->fresh(), $note));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $problem->member, NotificationEventType::ProblemUnresolved, new ProblemUnresolvedNotification($problem->fresh(), $note)
+        );
 
         // Check for cascaded tasks that can be reactivated
         $cascadedCount = $problem->tasks()
@@ -501,6 +573,7 @@ class CareManagementIndex extends Component
             'state' => TaskState::Added,
             'submitted_by' => auth()->id(),
             'submitted_at' => now(),
+            'care_plan_id' => ($this->viewMode === 'care_plan' && $this->selectedCarePlanId) ? $this->selectedCarePlanId : null,
         ]);
 
         // Audit event: TASK_ADDED
@@ -523,11 +596,9 @@ class CareManagementIndex extends Component
         }
 
         // Notify lead care manager
-        $member = $problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new \App\Notifications\TaskAddedNotification($task));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $problem->member, NotificationEventType::TaskAdded, new \App\Notifications\TaskAddedNotification($task)
+        );
 
         // If a Goal was created, trigger retroactive association dialog
         if ($this->taskType === 'goal') {
@@ -580,11 +651,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->startTask($task, auth()->user());
 
         // Notify lead care manager
-        $member = $task->problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new \App\Notifications\TaskStartedNotification($task->fresh()));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $task->problem->member, NotificationEventType::TaskStarted, new \App\Notifications\TaskStartedNotification($task->fresh())
+        );
 
         unset($this->problems);
     }
@@ -608,11 +677,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->completeTask($task, auth()->user(), $completionType);
 
         // Notify lead care manager
-        $member = $task->problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new \App\Notifications\TaskCompletedNotification($task->fresh()));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $task->problem->member, NotificationEventType::TaskCompleted, new \App\Notifications\TaskCompletedNotification($task->fresh())
+        );
 
         $this->reset(['completeTaskId', 'completionReason']);
         unset($this->problems);
@@ -644,11 +711,9 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->uncompleteTask($task, auth()->user(), $note);
 
         // Notify lead care manager
-        $member = $task->problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new \App\Notifications\TaskUncompletedNotification($task->fresh(), $note));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $task->problem->member, NotificationEventType::TaskUncompleted, new \App\Notifications\TaskUncompletedNotification($task->fresh(), $note)
+        );
 
         $this->reset(['uncompleteTaskId', 'uncompleteTaskNote']);
         unset($this->problems);
@@ -738,11 +803,9 @@ class CareManagementIndex extends Component
         $goal = Task::findOrFail($goalId);
         app(StateMachineService::class)->completeTask($goal, auth()->user(), TaskCompletionType::Completed);
 
-        $member = $goal->problem->member;
-        if ($member->lead_care_manager) {
-            $leadCm = User::find($member->lead_care_manager);
-            $leadCm?->notify(new \App\Notifications\TaskCompletedNotification($goal->fresh()));
-        }
+        app(NotificationService::class)->notifyLeadCareManager(
+            $goal->problem->member, NotificationEventType::TaskCompleted, new \App\Notifications\TaskCompletedNotification($goal->fresh())
+        );
 
         unset($this->problems);
         unset($this->goals);
@@ -834,6 +897,301 @@ class CareManagementIndex extends Component
             ->where('type', TaskType::Goal)
             ->pluck('name', 'id')
             ->toArray();
+    }
+
+    // ─── Unsupported Problem Classification ────────────────────
+
+    public function classifyUnsupportedProblem(int $problemId, string $classification): void
+    {
+        $problem = Problem::findOrFail($problemId);
+        $classificationEnum = ProblemClassification::from($classification);
+
+        $problem->update([
+            'classification' => $classificationEnum,
+            'classification_by' => auth()->id(),
+            'classification_at' => now(),
+            'unsupported_problem_flag' => false,
+        ]);
+
+        $noteText = "Reassessment classification: {$classificationEnum->label()}";
+
+        match ($classificationEnum) {
+            ProblemClassification::AssessmentEntryError => (function () use ($problem, $noteText) {
+                // No state change, just clear the flag and record audit
+                StateChangeHistory::create([
+                    'trackable_type' => Problem::class,
+                    'trackable_id' => $problem->id,
+                    'from_state' => $problem->state->value,
+                    'to_state' => $problem->state->value,
+                    'changed_by' => auth()->id(),
+                    'note' => $noteText,
+                    'metadata' => ['event' => 'PROBLEM_CLASSIFIED', 'classification' => 'assessment_entry_error', 'trigger' => 'REASSESSMENT_UNSUPPORTED'],
+                ]);
+            })(),
+            ProblemClassification::ProblemNoLongerConfirmed => (function () use ($problem, $noteText) {
+                if ($problem->state === ProblemState::Confirmed) {
+                    app(StateMachineService::class)->unconfirmProblem($problem, auth()->user(), $noteText);
+                }
+                StateChangeHistory::create([
+                    'trackable_type' => Problem::class,
+                    'trackable_id' => $problem->id,
+                    'from_state' => ProblemState::Confirmed->value,
+                    'to_state' => ProblemState::Added->value,
+                    'changed_by' => auth()->id(),
+                    'note' => $noteText,
+                    'metadata' => ['event' => 'PROBLEM_CLASSIFIED', 'classification' => 'problem_no_longer_confirmed', 'trigger' => 'REASSESSMENT_UNSUPPORTED'],
+                ]);
+            })(),
+            ProblemClassification::ProblemResolved => (function () use ($problem, $noteText) {
+                if ($problem->state === ProblemState::Confirmed) {
+                    app(StateMachineService::class)->resolveProblem($problem, auth()->user());
+                }
+                StateChangeHistory::create([
+                    'trackable_type' => Problem::class,
+                    'trackable_id' => $problem->id,
+                    'from_state' => ProblemState::Confirmed->value,
+                    'to_state' => ProblemState::Resolved->value,
+                    'changed_by' => auth()->id(),
+                    'note' => $noteText,
+                    'metadata' => ['event' => 'PROBLEM_CLASSIFIED', 'classification' => 'problem_resolved', 'trigger' => 'REASSESSMENT_UNSUPPORTED'],
+                ]);
+            })(),
+        };
+
+        unset($this->problems);
+    }
+
+    // ─── Lock Actions ─────────────────────────────────────────
+
+    public function acquireLock(int $problemId): void
+    {
+        $problem = Problem::findOrFail($problemId);
+
+        // Auto-release expired locks
+        if ($problem->isLockExpired()) {
+            $problem->releaseLock();
+            $problem->refresh();
+        }
+
+        if ($problem->isLockedByAnother(auth()->id())) {
+            $lockedBy = $problem->lockedByUser?->name ?? 'another user';
+            session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+            return;
+        }
+
+        $timeout = (int) \App\Models\OrganizationSetting::get('lock_timeout_minutes', 15);
+
+        $problem->update([
+            'locked_by' => auth()->id(),
+            'locked_at' => now(),
+            'lock_session_id' => session()->getId(),
+            'lock_expires_at' => now()->addMinutes($timeout),
+        ]);
+
+        unset($this->problems);
+    }
+
+    public function releaseLock(int $problemId): void
+    {
+        $problem = Problem::findOrFail($problemId);
+
+        if ($problem->locked_by === auth()->id()) {
+            $problem->releaseLock();
+            unset($this->problems);
+        }
+    }
+
+    public function adminReleaseLock(int $problemId): void
+    {
+        $user = auth()->user();
+
+        if (!$user->role || $user->role !== \App\Enums\UserRole::Admin) {
+            session()->flash('error', 'Only administrators can release locks.');
+            return;
+        }
+
+        $problem = Problem::findOrFail($problemId);
+        $originalLockHolder = $problem->locked_by;
+
+        StateChangeHistory::create([
+            'trackable_type' => Problem::class,
+            'trackable_id' => $problem->id,
+            'from_state' => $problem->state->value,
+            'to_state' => $problem->state->value,
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'LOCK_ADMIN_RELEASED',
+                'original_lock_holder' => $originalLockHolder,
+            ],
+        ]);
+
+        $problem->releaseLock();
+        unset($this->problems);
+    }
+
+    // ─── Note Actions ─────────────────────────────────────────
+
+    public function openAddNoteModal(string $entityType, int $entityId): void
+    {
+        $this->noteEntityType = $entityType;
+        $this->noteEntityId = $entityId;
+        $this->noteContent = '';
+        $this->noteNotify = false;
+    }
+
+    public function saveNote(): void
+    {
+        $this->validate([
+            'noteContent' => 'required|string|min:1',
+            'noteEntityType' => 'required|string|in:problem,task',
+            'noteEntityId' => 'required|integer',
+        ]);
+
+        $modelClass = $this->noteEntityType === 'problem' ? Problem::class : Task::class;
+        $entity = $modelClass::findOrFail($this->noteEntityId);
+
+        $note = Note::create([
+            'content' => $this->noteContent,
+            'created_by' => auth()->id(),
+            'notable_type' => $modelClass,
+            'notable_id' => $this->noteEntityId,
+            'notify' => $this->noteNotify,
+        ]);
+
+        // Audit event
+        StateChangeHistory::create([
+            'trackable_type' => $modelClass,
+            'trackable_id' => $this->noteEntityId,
+            'from_state' => $entity instanceof Problem ? $entity->state->value : $entity->state->value,
+            'to_state' => $entity instanceof Problem ? $entity->state->value : $entity->state->value,
+            'changed_by' => auth()->id(),
+            'metadata' => ['event' => 'NOTE_ADDED', 'note_id' => $note->id],
+        ]);
+
+        // Send notification if notify checkbox was checked
+        if ($this->noteNotify) {
+            $member = $entity instanceof Problem ? $entity->member : $entity->problem->member;
+            app(NotificationService::class)->notifyLeadCareManager(
+                $member, NotificationEventType::NoteAdded, new NoteAddedNotification($note)
+            );
+        }
+
+        $this->reset(['noteEntityType', 'noteEntityId', 'noteContent', 'noteNotify']);
+        unset($this->problems);
+    }
+
+    // ─── State Change History ───────────────────────────────────
+
+    public function showStateHistory(string $type, int $id): void
+    {
+        $modelClass = $type === 'problem' ? Problem::class : Task::class;
+        $entity = $modelClass::findOrFail($id);
+
+        $this->stateHistoryRecords = StateChangeHistory::where('trackable_type', $modelClass)
+            ->where('trackable_id', $id)
+            ->with('changedByUser')
+            ->orderBy('created_at', 'asc')
+            ->get()
+            ->map(fn ($record) => [
+                'from_state' => $record->from_state,
+                'to_state' => $record->to_state,
+                'changed_by' => $record->changedByUser?->name ?? 'System',
+                'role' => $record->changedByUser?->role?->label() ?? 'N/A',
+                'note' => $record->note,
+                'event' => $record->metadata['event'] ?? null,
+                'created_at' => $record->created_at->format('M j, Y g:i A'),
+            ])
+            ->toArray();
+
+        $this->historyEntityName = $entity->name;
+        $this->showHistoryModal = true;
+    }
+
+    public function closeHistoryModal(): void
+    {
+        $this->showHistoryModal = false;
+        $this->stateHistoryRecords = [];
+        $this->historyEntityName = null;
+    }
+
+    // ─── Outreach Actions ───────────────────────────────────────
+
+    #[Computed]
+    public function outreachLogs()
+    {
+        return $this->member->outreachLogs()
+            ->with('staff')
+            ->orderBy('outreach_date', 'desc')
+            ->get();
+    }
+
+    #[Computed]
+    public function canLogOutreach(): bool
+    {
+        $user = auth()->user();
+
+        if (!$user->role || !$user->role->canLogOutreach()) {
+            return false;
+        }
+
+        return $this->member->outreachLogs()->count() < OutreachLog::MAX_ATTEMPTS;
+    }
+
+    public function saveOutreach(): void
+    {
+        $this->validate([
+            'outreachMethod' => 'required|string',
+            'outreachDate' => 'required|date',
+            'outreachOutcome' => 'required|string',
+            'outreachNotes' => 'nullable|string',
+        ]);
+
+        // Enforce max 3 attempts
+        if ($this->member->outreachLogs()->count() >= OutreachLog::MAX_ATTEMPTS) {
+            $this->addError('outreachMethod', 'Maximum of 3 outreach attempts reached for this member.');
+            return;
+        }
+
+        // Verify role permission
+        $user = auth()->user();
+        if (!$user->role || !$user->role->canLogOutreach()) {
+            $this->addError('outreachMethod', 'You do not have permission to log outreach attempts.');
+            return;
+        }
+
+        $log = OutreachLog::create([
+            'member_id' => $this->member->id,
+            'method' => $this->outreachMethod,
+            'outreach_date' => $this->outreachDate,
+            'outcome' => $this->outreachOutcome,
+            'notes' => $this->outreachNotes ?: null,
+            'staff_id' => auth()->id(),
+            'logged_at' => now(),
+        ]);
+
+        // Audit event
+        StateChangeHistory::create([
+            'trackable_type' => Member::class,
+            'trackable_id' => $this->member->id,
+            'from_state' => 'outreach',
+            'to_state' => 'outreach_logged',
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'OUTREACH_LOGGED',
+                'outreach_log_id' => $log->id,
+                'method' => $this->outreachMethod,
+                'outcome' => $this->outreachOutcome,
+            ],
+        ]);
+
+        // Notify lead care manager
+        app(NotificationService::class)->notifyLeadCareManager(
+            $this->member, NotificationEventType::OutreachLogged, new \App\Notifications\OutreachLoggedNotification($log)
+        );
+
+        $this->reset(['outreachMethod', 'outreachDate', 'outreachOutcome', 'outreachNotes']);
+        unset($this->outreachLogs);
+        unset($this->canLogOutreach);
     }
 
     // ─── Helpers ─────────────────────────────────────────────

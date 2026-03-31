@@ -29,6 +29,16 @@ class Member extends Model
         return $this->hasMany(Problem::class);
     }
 
+    public function carePlans(): HasMany
+    {
+        return $this->hasMany(CarePlan::class);
+    }
+
+    public function outreachLogs(): HasMany
+    {
+        return $this->hasMany(OutreachLog::class);
+    }
+
     public function leadCareManager(): BelongsTo
     {
         return $this->belongsTo(User::class, 'lead_care_manager');

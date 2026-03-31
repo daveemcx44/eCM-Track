@@ -14,8 +14,15 @@ class Note extends Model
     const UPDATED_AT = null;
 
     protected $fillable = [
-        'content', 'created_by', 'notable_type', 'notable_id',
+        'content', 'created_by', 'notable_type', 'notable_id', 'notify',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'notify' => 'boolean',
+        ];
+    }
 
     public function notable(): MorphTo
     {

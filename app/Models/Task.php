@@ -23,6 +23,7 @@ class Task extends Model
         'provider', 'task_date', 'due_date', 'state', 'completion_type',
         'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
         'started_by', 'started_at', 'completed_by', 'completed_at',
+        'care_plan_id',
     ];
 
     protected function casts(): array

@@ -85,4 +85,28 @@ enum UserRole: string
             self::Admin,
         ]);
     }
+
+    public function canReleaseLock(): bool
+    {
+        return $this === self::Admin;
+    }
+
+    public function canLogOutreach(): bool
+    {
+        return in_array($this, [
+            self::CareManager,
+            self::Supervisor,
+            self::CommunityHealthWorker,
+        ]);
+    }
+
+    public function canAddNote(): bool
+    {
+        return in_array($this, [
+            self::CareManager,
+            self::Supervisor,
+            self::AuthorizedClinician,
+            self::Admin,
+        ]);
+    }
 }

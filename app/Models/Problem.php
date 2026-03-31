@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\EncounterSetting;
+use App\Enums\ProblemClassification;
 use App\Enums\ProblemState;
 use App\Enums\ProblemType;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -20,7 +21,9 @@ class Problem extends Model
         'member_id', 'name', 'type', 'code', 'encounter_setting',
         'state', 'submitted_by', 'submitted_at', 'confirmed_by',
         'confirmed_at', 'resolved_by', 'resolved_at', 'lock_version',
-        'locked_by', 'locked_at', 'care_plan_id',
+        'locked_by', 'locked_at', 'lock_session_id', 'lock_expires_at',
+        'care_plan_id', 'unsupported_problem_flag', 'classification',
+        'classification_by', 'classification_at',
     ];
 
     protected function casts(): array
@@ -33,6 +36,10 @@ class Problem extends Model
             'confirmed_at' => 'datetime',
             'resolved_at' => 'datetime',
             'locked_at' => 'datetime',
+            'lock_expires_at' => 'datetime',
+            'unsupported_problem_flag' => 'boolean',
+            'classification' => ProblemClassification::class,
+            'classification_at' => 'datetime',
         ];
     }
 
@@ -87,7 +94,38 @@ class Problem extends Model
             return false;
         }
 
+        // Expired locks are not locks
+        if ($this->lock_expires_at && $this->lock_expires_at->isPast()) {
+            return false;
+        }
+
         return $this->locked_by !== $userId;
+    }
+
+    /**
+     * Check if the lock has expired.
+     */
+    public function isLockExpired(): bool
+    {
+        return $this->locked_by && $this->lock_expires_at && $this->lock_expires_at->isPast();
+    }
+
+    /**
+     * Release the lock on this problem.
+     */
+    public function releaseLock(): void
+    {
+        $this->update([
+            'locked_by' => null,
+            'locked_at' => null,
+            'lock_session_id' => null,
+            'lock_expires_at' => null,
+        ]);
+    }
+
+    public function carePlan(): BelongsTo
+    {
+        return $this->belongsTo(CarePlan::class);
     }
 
     public function isConfirmed(): bool
