@@ -10,6 +10,12 @@
     showUncompleteTaskModal: false,
     showReactivationDialog: false,
     showResolveReactivationDialog: false,
+    showAddNoteModal: false,
+    showOutreachModal: false,
+    showNotificationSettingsModal: false,
+    showLockInfoModal: false,
+    lockInfoProblemName: '',
+    lockInfoUserName: '',
     confirmProblemId: null,
     resolveProblemId: null,
     reactivationProblemId: null,
@@ -50,11 +56,49 @@
         </div>
         <div class="ml-auto flex flex-wrap gap-2">
             <button type="button" @click="$wire.set('problemType', '{{ $activeFilter ?? '' }}'); showAddProblemModal = true" class="bg-gray-800 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-500 whitespace-nowrap">Add Problem</button>
-            <button type="button" class="bg-gray-500 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-400 whitespace-nowrap">Notes</button>
+            <button type="button" wire:click="openAddNoteModal('member', {{ $member->id }})" @click="showAddNoteModal = true" class="bg-gray-500 dark:bg-gray-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-gray-400 whitespace-nowrap">Notes</button>
             <button type="button" class="bg-indigo-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-indigo-500 whitespace-nowrap">Member Main</button>
+            @if(auth()->user()->role?->canLogOutreach())
+            <button type="button" @click="showOutreachModal = true" class="bg-teal-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-teal-500 whitespace-nowrap">Outreach</button>
+            @endif
+            @if(auth()->user()->role?->canReleaseLock())
+            <button type="button" @click="showNotificationSettingsModal = true" class="bg-orange-500 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-orange-400 whitespace-nowrap">NOTIFY</button>
+            @else
             <button type="button" class="bg-orange-500 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-orange-400 whitespace-nowrap">NOTIFY</button>
+            @endif
         </div>
     </div>
+
+    {{-- Outreach History Section (CM-OUT-002) --}}
+    @php $outreachLogs = $this->outreachLogs; @endphp
+    @if($outreachLogs->count() > 0 || (auth()->user()->role?->canLogOutreach() && $this->canLogOutreach))
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow px-6 py-4 mb-6">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Outreach Log ({{ $outreachLogs->count() }}/3)</h3>
+            @if(auth()->user()->role?->canLogOutreach())
+                @if($this->canLogOutreach)
+                    <button type="button" @click="showOutreachModal = true" class="text-sm text-teal-600 dark:text-teal-400 hover:text-teal-800 font-medium">+ Log Attempt</button>
+                @else
+                    <span class="text-xs text-gray-400 italic">Maximum of 3 outreach attempts reached</span>
+                @endif
+            @endif
+        </div>
+        @if($outreachLogs->count() > 0)
+        <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            @foreach($outreachLogs as $log)
+            <div class="py-2 flex items-center gap-4 text-sm">
+                <span class="font-medium text-gray-700 dark:text-gray-300 w-28">{{ $log->method->label() }}</span>
+                <span class="text-gray-500 dark:text-gray-400 w-36">{{ $log->outreach_date->format('M j, Y g:ia') }}</span>
+                <span @class(['px-2 py-0.5 rounded-full text-xs font-semibold', 'bg-green-100 text-green-700' => $log->outcome === \App\Enums\OutreachOutcome::SuccessfulContact, 'bg-gray-100 text-gray-600' => $log->outcome !== \App\Enums\OutreachOutcome::SuccessfulContact])>{{ $log->outcome->label() }}</span>
+                <span class="text-gray-400 dark:text-gray-500 text-xs">{{ $log->staff->name ?? '' }}</span>
+            </div>
+            @endforeach
+        </div>
+        @else
+        <p class="text-sm text-gray-400">No outreach attempts logged yet.</p>
+        @endif
+    </div>
+    @endif
 
     <div class="flex gap-4">
         <!-- Left Sidebar: Category Filters -->
@@ -100,13 +144,123 @@
                 @if($this->hasActiveFilters)
                 <button type="button" wire:click="clearAllFilters" class="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium whitespace-nowrap">Clear filters</button>
                 @endif
+                @if($viewMode === 'ptr' && $this->carePlans->count() > 0)
+                <select wire:model.live="carePlanFilter" class="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3">
+                    <option value="">All Care Plans</option>
+                    @foreach($this->carePlans as $cp)
+                        <option value="{{ $cp->id }}">{{ $cp->version_number ? 'Version ' . $cp->version_number : 'Plan #' . $cp->id }}</option>
+                    @endforeach
+                </select>
+                @endif
                 <div class="flex gap-1 ml-auto">
                     <button type="button" wire:click="switchView('ptr')" @class(['px-3 py-1.5 text-xs font-medium rounded-md transition', 'bg-indigo-600 text-white' => $viewMode === 'ptr', 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200' => $viewMode !== 'ptr'])>PTR View</button>
                     <button type="button" wire:click="switchView('goal')" @class(['px-3 py-1.5 text-xs font-medium rounded-md transition', 'bg-indigo-600 text-white' => $viewMode === 'goal', 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200' => $viewMode !== 'goal'])>Goal View</button>
+                    <button type="button" wire:click="switchView('care_plan')" @class(['px-3 py-1.5 text-xs font-medium rounded-md transition', 'bg-indigo-600 text-white' => $viewMode === 'care_plan', 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200' => $viewMode !== 'care_plan'])>Care Plan</button>
                 </div>
             </div>
 
-            @if($viewMode === 'goal')
+            @if($viewMode === 'care_plan')
+            {{-- ══════ Care Plan View ══════ --}}
+            <div class="px-4 py-4">
+                {{-- Version Selector --}}
+                <div class="flex items-center gap-4 mb-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">Care Plan Version:</label>
+                    <select wire:model.live="selectedCarePlanId" class="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:border-indigo-500 focus:ring-indigo-500 py-2 px-3">
+                        <option value="">Select a version...</option>
+                        @foreach($this->carePlans as $cp)
+                            <option value="{{ $cp->id }}">{{ $cp->version_number ? 'Version ' . $cp->version_number : 'Plan #' . $cp->id }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                {{-- Care Planning Summary (CM-CP-004) --}}
+                @php $summary = $this->carePlanSummary; @endphp
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                    <div class="bg-gray-50 dark:bg-gray-700/30 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">Last Assessment</p>
+                        <p class="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{{ $summary['assessment_type'] ?? 'None' }}</p>
+                        <p class="text-xs text-gray-400">{{ $summary['assessment_date'] ?? '—' }}</p>
+                    </div>
+                    <div class="bg-gray-50 dark:bg-gray-700/30 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">Next Reassessment</p>
+                        <p class="mt-1 text-sm font-semibold @if($summary && ($summary['is_overdue'] ?? false)) text-red-600 dark:text-red-400 @else text-gray-900 dark:text-white @endif">
+                            {{ $summary['next_reassessment_date'] ?? '—' }}
+                            @if($summary && ($summary['is_overdue'] ?? false)) <span class="text-xs ml-1">OVERDUE</span> @endif
+                        </p>
+                    </div>
+                    <div class="bg-gray-50 dark:bg-gray-700/30 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">Risk Level</p>
+                        <p class="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{{ $summary['risk_level'] ?? '—' }}</p>
+                    </div>
+                    <div class="bg-gray-50 dark:bg-gray-700/30 rounded-lg p-3">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">Plan Versions</p>
+                        <p class="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{{ $summary['version_count'] ?? 0 }} (v{{ $summary['current_version'] ?? '—' }})</p>
+                    </div>
+                </div>
+
+                @if($selectedCarePlanId)
+                {{-- Unsupported Problems (CM-CP-005) --}}
+                @php $unsupported = $this->problems->where('is_unsupported', true)->where('unsupported_classification', null); @endphp
+                @if($unsupported->count() > 0)
+                <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4 mb-4">
+                    <h4 class="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">Unsupported Problems Requiring Classification</h4>
+                    <p class="text-xs text-amber-600 dark:text-amber-400 mb-3">The following problems are no longer identified by the latest assessment. Please classify each one.</p>
+                    @foreach($unsupported as $up)
+                    <div class="flex items-center gap-3 py-2 border-t border-amber-200 dark:border-amber-700">
+                        <span class="text-sm font-medium text-gray-900 dark:text-white flex-1">{{ $up->name }}</span>
+                        <select wire:change="classifyUnsupportedProblem({{ $up->id }}, $event.target.value)" class="text-xs border border-amber-300 dark:border-amber-600 dark:bg-amber-900/30 rounded-md px-2 py-1">
+                            <option value="">Classify...</option>
+                            @foreach(\App\Enums\ProblemClassification::cases() as $cls)
+                                <option value="{{ $cls->value }}">{{ $cls->label() }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    @endforeach
+                </div>
+                @endif
+
+                {{-- Filtered Problem List --}}
+                <table class="w-full table-fixed">
+                    <thead>
+                        <tr class="border-b-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                            <th class="w-[35%] px-5 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Problem</th>
+                            <th class="w-[15%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Status</th>
+                            <th class="w-[15%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Tasks</th>
+                            <th class="w-[35%] px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Classification</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 dark:divide-gray-700/50">
+                        @forelse($this->problems as $problem)
+                        <tr @class(['bg-amber-50/50 dark:bg-amber-900/10' => $problem->is_unsupported && !$problem->unsupported_classification])>
+                            <td class="px-5 py-3 text-sm font-medium text-gray-900 dark:text-white">
+                                {{ $problem->name }}
+                                @if($problem->is_unsupported && !$problem->unsupported_classification)
+                                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-200 text-amber-800 dark:bg-amber-800 dark:text-amber-200">Unsupported</span>
+                                @endif
+                            </td>
+                            <td class="px-4 py-3"><span @class(['px-2.5 py-1 rounded-full text-xs font-semibold', 'bg-yellow-100 text-yellow-700' => $problem->state === \App\Enums\ProblemState::Added, 'bg-green-100 text-green-700' => $problem->state === \App\Enums\ProblemState::Confirmed, 'bg-gray-100 text-gray-700' => $problem->state === \App\Enums\ProblemState::Resolved])>{{ ucfirst($problem->state->value) }}</span></td>
+                            <td class="px-4 py-3 text-sm text-gray-500">{{ $problem->tasks->count() }} tasks</td>
+                            <td class="px-4 py-3 text-sm text-gray-500">
+                                @if($problem->unsupported_classification)
+                                    <span class="text-xs text-gray-600 dark:text-gray-400">{{ \App\Enums\ProblemClassification::from($problem->unsupported_classification)->label() }}</span>
+                                @elseif($problem->is_unsupported)
+                                    <span class="text-xs text-amber-600 italic">Pending classification</span>
+                                @else
+                                    —
+                                @endif
+                            </td>
+                        </tr>
+                        @empty
+                        <tr><td colspan="4" class="px-6 py-8 text-center text-sm text-gray-400">No problems linked to this care plan version.</td></tr>
+                        @endforelse
+                    </tbody>
+                </table>
+                @else
+                <div class="py-8 text-center text-sm text-gray-400">Select a care plan version to view linked problems.</div>
+                @endif
+            </div>
+
+            @elseif($viewMode === 'goal')
             {{-- ══════ Goal View (Read-Only) ══════ --}}
             <table class="w-full table-fixed">
                 <thead>
@@ -199,6 +353,14 @@
                                         class="px-3.5 py-1 rounded-full text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600 shadow-sm transition">Unresolve</button>
                                     @endcan
                                     <button type="button" wire:click="$dispatch('open-problem-detail', { problemId: {{ $problem->id }} })" title="Click to view Problem Details" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold bg-indigo-100 text-indigo-600 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 transition shrink-0">?</button>
+                                    @if(auth()->user()->role?->canAddNote())
+                                    <button type="button" wire:click="openAddNoteModal('problem', {{ $problem->id }})" @click="showAddNoteModal = true" title="Add Note" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-700 dark:text-gray-400 transition shrink-0">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/></svg>
+                                    </button>
+                                    @endif
+                                    <button type="button" wire:click="showStateHistory('problem', {{ $problem->id }})" title="View History" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-700 dark:text-gray-400 transition shrink-0">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                                    </button>
                                     <button type="button"
                                         @if($problem->state === \App\Enums\ProblemState::Confirmed) wire:click="openAddTaskModal({{ $problem->id }})" @click="showAddTaskModal = true" @endif
                                         title="{{ $problem->state === \App\Enums\ProblemState::Confirmed ? 'Click to ADD Task to Problem' : 'Tasks may be added only if a Problem has been confirmed but not resolved' }}" class="inline-flex items-center justify-center w-7 h-7 rounded-full text-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-600 dark:hover:text-gray-200 transition shrink-0">+</button>
@@ -679,6 +841,147 @@
             <div class="flex justify-end gap-3 px-6 py-4 bg-gray-100 dark:bg-gray-700">
                 <x-secondary-button type="button" wire:click="skipRetroactiveAssociations">{{ __('Skip') }}</x-secondary-button>
                 <x-button type="button" wire:click="saveRetroactiveAssociations">{{ __('Associate Selected') }}</x-button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- ══════ ADD NOTE MODAL (CM-AUD-001) ══════ --}}
+    <div x-show="showAddNoteModal" x-cloak class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50" @keydown.escape.window="showAddNoteModal = false">
+        <div class="fixed inset-0" @click="showAddNoteModal = false"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative" @click.stop>
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Add Note</h3>
+                <div class="mt-4">
+                    <textarea wire:model="noteContent" rows="4" class="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm" placeholder="Enter your note..."></textarea>
+                    <x-input-error for="noteContent" class="mt-2" />
+                </div>
+                <label class="flex items-center gap-2 mt-3 text-sm text-gray-600 dark:text-gray-400">
+                    <input type="checkbox" wire:model="noteNotify" class="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                    Notify lead care manager
+                </label>
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" @click="showAddNoteModal = false">{{ __('Cancel') }}</x-secondary-button>
+                <x-button type="button" wire:click="saveNote" @click="showAddNoteModal = false">{{ __('Save Note') }}</x-button>
+            </div>
+        </div>
+    </div>
+
+    {{-- ══════ STATE CHANGE HISTORY MODAL (CM-AUD-002) ══════ --}}
+    @if($showHistoryModal)
+    <div class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50">
+        <div class="fixed inset-0" wire:click="closeHistoryModal"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-lg sm:mx-auto relative">
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">State Change History — {{ $historyEntityName }}</h3>
+                <div class="mt-4 max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                    @forelse($stateHistoryRecords as $record)
+                    <div class="py-3">
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">{{ $record['from_state'] ?? '—' }}</span>
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
+                            <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">{{ $record['to_state'] }}</span>
+                        </div>
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            by {{ $record['changed_by'] }} ({{ $record['role'] }}) &middot; {{ $record['created_at'] }}
+                        </p>
+                        @if(!empty($record['note']))
+                        <p class="mt-1 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1 italic">"{{ $record['note'] }}"</p>
+                        @endif
+                    </div>
+                    @empty
+                    <p class="py-4 text-sm text-gray-400 text-center">No state changes recorded.</p>
+                    @endforelse
+                </div>
+            </div>
+            <div class="flex justify-end px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" wire:click="closeHistoryModal">{{ __('Close') }}</x-secondary-button>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- ══════ OUTREACH LOG MODAL (CM-OUT-001) ══════ --}}
+    <div x-show="showOutreachModal" x-cloak class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50" @keydown.escape.window="showOutreachModal = false">
+        <div class="fixed inset-0" @click="showOutreachModal = false"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative" @click.stop>
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Log Outreach Attempt</h3>
+                <div class="mt-4 space-y-4">
+                    <div>
+                        <x-label for="outreachMethod" value="{{ __('Method') }}" />
+                        <select id="outreachMethod" wire:model="outreachMethod" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm">
+                            <option value="">Select method...</option>
+                            @foreach(\App\Enums\OutreachMethod::cases() as $method)
+                                <option value="{{ $method->value }}">{{ $method->label() }}</option>
+                            @endforeach
+                        </select>
+                        <x-input-error for="outreachMethod" class="mt-2" />
+                    </div>
+                    <div>
+                        <x-label for="outreachDate" value="{{ __('Date & Time') }}" />
+                        <x-input id="outreachDate" type="datetime-local" class="mt-1 block w-full" wire:model="outreachDate" />
+                        <x-input-error for="outreachDate" class="mt-2" />
+                    </div>
+                    <div>
+                        <x-label for="outreachOutcome" value="{{ __('Outcome') }}" />
+                        <select id="outreachOutcome" wire:model="outreachOutcome" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm">
+                            <option value="">Select outcome...</option>
+                            @foreach(\App\Enums\OutreachOutcome::cases() as $outcome)
+                                <option value="{{ $outcome->value }}">{{ $outcome->label() }}</option>
+                            @endforeach
+                        </select>
+                        <x-input-error for="outreachOutcome" class="mt-2" />
+                    </div>
+                    <div>
+                        <x-label for="outreachNotes" value="{{ __('Notes (optional)') }}" />
+                        <textarea id="outreachNotes" wire:model="outreachNotes" rows="2" class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm text-sm" placeholder="Optional notes..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" @click="showOutreachModal = false">{{ __('Cancel') }}</x-secondary-button>
+                <x-button type="button" wire:click="saveOutreach" @click="showOutreachModal = false">{{ __('Log Attempt') }}</x-button>
+            </div>
+        </div>
+    </div>
+
+    {{-- ══════ NOTIFICATION SETTINGS MODAL (CM-NOT-001) ══════ --}}
+    @if(auth()->user()->role?->canReleaseLock())
+    <div x-show="showNotificationSettingsModal" x-cloak class="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50" @keydown.escape.window="showNotificationSettingsModal = false">
+        <div class="fixed inset-0" @click="showNotificationSettingsModal = false"><div class="absolute inset-0 bg-gray-500 dark:bg-gray-900 opacity-75"></div></div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-xl sm:w-full sm:max-w-md sm:mx-auto relative" @click.stop>
+            <div class="px-6 py-5">
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Notification Settings</h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Toggle which events send notifications.</p>
+                <div class="mt-4 divide-y divide-gray-100 dark:divide-gray-700">
+                    @foreach(\App\Models\NotificationSetting::all() as $setting)
+                    <label class="flex items-center justify-between py-3 cursor-pointer">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">{{ $setting->event_type->label() }}</span>
+                        <input type="checkbox" {{ $setting->enabled ? 'checked' : '' }}
+                            wire:click="toggleNotificationSetting('{{ $setting->event_type->value }}')"
+                            class="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                    </label>
+                    @endforeach
+                </div>
+
+                {{-- Admin Lock Management (CM-CON-003) --}}
+                <div class="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Active Problem Locks</h4>
+                    @php $lockedProblems = \App\Models\Problem::whereNotNull('locked_by')->with('lockedByUser')->get(); @endphp
+                    @forelse($lockedProblems as $lp)
+                    <div class="flex items-center justify-between py-2 text-sm">
+                        <span class="text-gray-700 dark:text-gray-300">{{ $lp->name }} <span class="text-xs text-gray-400">(by {{ $lp->lockedByUser?->name }})</span></span>
+                        <button type="button" wire:click="adminReleaseLock({{ $lp->id }})" wire:confirm="Release this lock?" class="text-xs text-red-600 hover:text-red-800 font-medium">Release</button>
+                    </div>
+                    @empty
+                    <p class="text-sm text-gray-400">No active locks.</p>
+                    @endforelse
+                </div>
+            </div>
+            <div class="flex justify-end px-6 py-4 bg-gray-100 dark:bg-gray-700">
+                <x-secondary-button type="button" @click="showNotificationSettingsModal = false">{{ __('Close') }}</x-secondary-button>
             </div>
         </div>
     </div>

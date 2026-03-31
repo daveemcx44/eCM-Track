@@ -2,32 +2,33 @@
 
 namespace App\Livewire\CareManagement;
 
-use App\Enums\EncounterSetting;
+use App\Enums\NotificationEventType;
+use App\Enums\ProblemClassification;
 use App\Enums\ProblemState;
-use App\Enums\ProblemType;
-use App\Enums\ResourceRating;
 use App\Enums\TaskCompletionType;
 use App\Enums\TaskState;
 use App\Enums\TaskType;
-use App\Enums\NotificationEventType;
-use App\Enums\ProblemClassification;
-use App\Enums\OutreachMethod;
-use App\Enums\OutreachOutcome;
-use App\Models\CarePlan;
+use App\Enums\UserRole;
 use App\Models\Member;
-use App\Models\OutreachLog;
 use App\Models\Note;
+use App\Models\NotificationSetting;
+use App\Models\OrganizationSetting;
+use App\Models\OutreachLog;
 use App\Models\Problem;
 use App\Models\Resource;
-use App\Models\Task;
 use App\Models\StateChangeHistory;
-use App\Models\User;
+use App\Models\Task;
 use App\Notifications\NoteAddedNotification;
+use App\Notifications\OutreachLoggedNotification;
 use App\Notifications\ProblemAddedNotification;
 use App\Notifications\ProblemConfirmedNotification;
 use App\Notifications\ProblemResolvedNotification;
 use App\Notifications\ProblemUnconfirmedNotification;
 use App\Notifications\ProblemUnresolvedNotification;
+use App\Notifications\TaskAddedNotification;
+use App\Notifications\TaskCompletedNotification;
+use App\Notifications\TaskStartedNotification;
+use App\Notifications\TaskUncompletedNotification;
 use App\Services\CareManagement\NotificationService;
 use App\Services\CareManagement\PtrValidationService;
 use App\Services\CareManagement\StateMachineService;
@@ -41,65 +42,92 @@ class CareManagementIndex extends Component
     use WithPagination;
 
     public Member $member;
+
     public ?string $activeFilter = null;
 
     // ─── Add Problem Modal ───────────────────────────────────
     public string $problemType = '';
+
     public string $problemName = '';
+
     public string $problemCode = '';
+
     public string $problemEncounterSetting = '';
 
     // ─── Add Task Modal ──────────────────────────────────────
     public ?int $taskProblemId = null;
+
     public string $taskType = '';
+
     public string $taskName = '';
+
     public string $taskCode = '';
+
     public string $taskEncounterSetting = '';
+
     public string $taskProvider = '';
+
     public ?string $taskDate = null;
+
     public ?string $taskDueDate = null;
 
     // ─── Add Resource Modal ──────────────────────────────────
     public ?int $resourceTaskId = null;
+
     public string $surveyName = '';
+
     public string $atHome = '';
+
     public string $atWork = '';
+
     public string $atPlay = '';
 
     // ─── Unconfirm Modal ──────────────────────────────────────
     public ?int $unconfirmProblemId = null;
+
     public string $unconfirmNote = '';
 
     // ─── Unresolve Modal ──────────────────────────────────────
     public ?int $unresolveProblemId = null;
+
     public string $unresolveNote = '';
 
     // ─── Complete Task Modal ──────────────────────────────────
     public ?int $completeTaskId = null;
+
     public string $completionReason = '';
 
     // ─── Uncomplete Task Modal ────────────────────────────────
     public ?int $uncompleteTaskId = null;
+
     public string $uncompleteTaskNote = '';
 
     // ─── Goal Completion ─────────────────────────────────────
     public ?int $completeGoalId = null;
+
     public array $incompleteGoalTasks = [];
 
     // ─── Goal Associations ─────────────────────────────────────
     public array $selectedGoals = [];
+
     public ?int $newGoalId = null;
+
     public array $retroactiveTaskIds = [];
 
     // ─── Add Note Modal ──────────────────────────────────────────
     public ?string $noteEntityType = null;
+
     public ?int $noteEntityId = null;
+
     public string $noteContent = '';
+
     public bool $noteNotify = false;
 
     // ─── State Change History Modal ──────────────────────────────
     public array $stateHistoryRecords = [];
+
     public bool $showHistoryModal = false;
+
     public ?string $historyEntityName = null;
 
     // ─── View Mode ──────────────────────────────────────────────
@@ -107,16 +135,21 @@ class CareManagementIndex extends Component
 
     // ─── Care Plan ────────────────────────────────────────────────
     public ?int $selectedCarePlanId = null;
+
     public ?int $carePlanFilter = null;
 
     // ─── Outreach Modal ─────────────────────────────────────────
     public string $outreachMethod = '';
+
     public ?string $outreachDate = null;
+
     public string $outreachOutcome = '';
+
     public string $outreachNotes = '';
 
     // ─── Filters & Search ─────────────────────────────────────
     public string $search = '';
+
     public string $statusFilter = '';
 
     public function setFilter(string $type): void
@@ -142,7 +175,7 @@ class CareManagementIndex extends Component
     public function switchView(string $mode): void
     {
         $this->viewMode = $mode;
-        if ($mode === 'care_plan' && !$this->selectedCarePlanId) {
+        if ($mode === 'care_plan' && ! $this->selectedCarePlanId) {
             // Auto-select the latest care plan
             $latest = $this->member->carePlans()->latest('version_number')->first();
             $this->selectedCarePlanId = $latest?->id;
@@ -172,7 +205,7 @@ class CareManagementIndex extends Component
     {
         $latestPlan = $this->member->carePlans()->latest('version_number')->first();
 
-        if (!$latestPlan) {
+        if (! $latestPlan) {
             return null;
         }
 
@@ -225,7 +258,7 @@ class CareManagementIndex extends Component
             $term = $this->search;
             $query->where(function ($q) use ($term) {
                 $q->where('name', 'like', "%{$term}%")
-                  ->orWhere('code', 'like', "%{$term}%");
+                    ->orWhere('code', 'like', "%{$term}%");
             });
         }
 
@@ -295,8 +328,9 @@ class CareManagementIndex extends Component
         $problem = Problem::findOrFail($problemId);
 
         // Check role-based permission
-        if (!auth()->user()->can('confirm', $problem)) {
+        if (! auth()->user()->can('confirm', $problem)) {
             session()->flash('error', 'You do not have permission to confirm problems.');
+
             return;
         }
 
@@ -304,6 +338,7 @@ class CareManagementIndex extends Component
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+
             return;
         }
 
@@ -316,6 +351,7 @@ class CareManagementIndex extends Component
 
             if ($cascadedCount > 0) {
                 $this->dispatch('show-reactivation-dialog', problemId: $problemId, taskCount: $cascadedCount);
+
                 return;
             }
         }
@@ -353,8 +389,9 @@ class CareManagementIndex extends Component
         $problem = Problem::findOrFail($this->unconfirmProblemId);
 
         // Check role-based permission
-        if (!auth()->user()->can('unconfirm', $problem)) {
+        if (! auth()->user()->can('unconfirm', $problem)) {
             session()->flash('error', 'You do not have permission to unconfirm problems.');
+
             return;
         }
 
@@ -362,6 +399,7 @@ class CareManagementIndex extends Component
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+
             return;
         }
 
@@ -417,14 +455,16 @@ class CareManagementIndex extends Component
     {
         $problem = Problem::findOrFail($problemId);
 
-        if (!auth()->user()->can('resolve', $problem)) {
+        if (! auth()->user()->can('resolve', $problem)) {
             session()->flash('error', 'You do not have permission to resolve problems.');
+
             return;
         }
 
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+
             return;
         }
 
@@ -455,14 +495,16 @@ class CareManagementIndex extends Component
 
         $problem = Problem::findOrFail($this->unresolveProblemId);
 
-        if (!auth()->user()->can('unresolve', $problem)) {
+        if (! auth()->user()->can('unresolve', $problem)) {
             session()->flash('error', 'You do not have permission to unresolve problems.');
+
             return;
         }
 
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+
             return;
         }
 
@@ -549,14 +591,16 @@ class CareManagementIndex extends Component
             app(PtrValidationService::class)->validateTaskCreation($problem);
         } catch (\InvalidArgumentException $e) {
             $this->addError('taskProblemId', $e->getMessage());
+
             return;
         }
 
         // CM staff restriction for Goal creation
         if ($this->taskType === 'goal') {
             $userRole = auth()->user()->role;
-            if (!$userRole || !$userRole->canCreateGoal()) {
+            if (! $userRole || ! $userRole->canCreateGoal()) {
                 $this->addError('taskType', 'Only Care Managers, Supervisors, or Admins can create Goals.');
+
                 return;
             }
         }
@@ -591,13 +635,13 @@ class CareManagementIndex extends Component
         ]);
 
         // Associate task with selected goals
-        if (!empty($this->selectedGoals) && $this->taskType !== 'goal') {
+        if (! empty($this->selectedGoals) && $this->taskType !== 'goal') {
             $task->goals()->sync($this->selectedGoals);
         }
 
         // Notify lead care manager
         app(NotificationService::class)->notifyLeadCareManager(
-            $problem->member, NotificationEventType::TaskAdded, new \App\Notifications\TaskAddedNotification($task)
+            $problem->member, NotificationEventType::TaskAdded, new TaskAddedNotification($task)
         );
 
         // If a Goal was created, trigger retroactive association dialog
@@ -608,13 +652,14 @@ class CareManagementIndex extends Component
                 ->pluck('name', 'id')
                 ->toArray();
 
-            if (!empty($existingTasks)) {
+            if (! empty($existingTasks)) {
                 $this->newGoalId = $task->id;
                 $this->retroactiveTaskIds = [];
                 $this->taskProblemId = null;
                 $this->selectedGoals = [];
                 $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
                 unset($this->problems);
+
                 return;
             }
         }
@@ -629,8 +674,9 @@ class CareManagementIndex extends Component
     {
         $task = Task::findOrFail($taskId);
 
-        if (!auth()->user()->can('approve', $task)) {
+        if (! auth()->user()->can('approve', $task)) {
             session()->flash('error', 'You do not have permission to approve this task.');
+
             return;
         }
 
@@ -645,6 +691,7 @@ class CareManagementIndex extends Component
         // Block start if task requires approval and hasn't been approved
         if ($task->state === TaskState::Added && $task->type->requiresApproval()) {
             session()->flash('error', 'This task requires approval before it can be started.');
+
             return;
         }
 
@@ -652,7 +699,7 @@ class CareManagementIndex extends Component
 
         // Notify lead care manager
         app(NotificationService::class)->notifyLeadCareManager(
-            $task->problem->member, NotificationEventType::TaskStarted, new \App\Notifications\TaskStartedNotification($task->fresh())
+            $task->problem->member, NotificationEventType::TaskStarted, new TaskStartedNotification($task->fresh())
         );
 
         unset($this->problems);
@@ -678,7 +725,7 @@ class CareManagementIndex extends Component
 
         // Notify lead care manager
         app(NotificationService::class)->notifyLeadCareManager(
-            $task->problem->member, NotificationEventType::TaskCompleted, new \App\Notifications\TaskCompletedNotification($task->fresh())
+            $task->problem->member, NotificationEventType::TaskCompleted, new TaskCompletedNotification($task->fresh())
         );
 
         $this->reset(['completeTaskId', 'completionReason']);
@@ -702,8 +749,9 @@ class CareManagementIndex extends Component
 
         $task = Task::findOrFail($this->uncompleteTaskId);
 
-        if (!auth()->user()->can('uncomplete', $task)) {
+        if (! auth()->user()->can('uncomplete', $task)) {
             session()->flash('error', 'You do not have permission to uncomplete this task.');
+
             return;
         }
 
@@ -712,7 +760,7 @@ class CareManagementIndex extends Component
 
         // Notify lead care manager
         app(NotificationService::class)->notifyLeadCareManager(
-            $task->problem->member, NotificationEventType::TaskUncompleted, new \App\Notifications\TaskUncompletedNotification($task->fresh(), $note)
+            $task->problem->member, NotificationEventType::TaskUncompleted, new TaskUncompletedNotification($task->fresh(), $note)
         );
 
         $this->reset(['uncompleteTaskId', 'uncompleteTaskNote']);
@@ -725,7 +773,7 @@ class CareManagementIndex extends Component
     {
         $this->resourceTaskId = $taskId;
         $task = Task::findOrFail($taskId);
-        $this->surveyName = 'Resource ' . ($task->resources()->count() + 1);
+        $this->surveyName = 'Resource '.($task->resources()->count() + 1);
         $this->reset(['atHome', 'atWork', 'atPlay']);
     }
 
@@ -745,6 +793,7 @@ class CareManagementIndex extends Component
             app(PtrValidationService::class)->validateResourceCreation($task);
         } catch (\InvalidArgumentException $e) {
             $this->addError('resourceTaskId', $e->getMessage());
+
             return;
         }
 
@@ -775,6 +824,7 @@ class CareManagementIndex extends Component
         if ($incompleteTasks->isEmpty()) {
             // All tasks complete — complete the goal directly
             $this->completeGoalDirectly($goalId);
+
             return;
         }
 
@@ -804,7 +854,7 @@ class CareManagementIndex extends Component
         app(StateMachineService::class)->completeTask($goal, auth()->user(), TaskCompletionType::Completed);
 
         app(NotificationService::class)->notifyLeadCareManager(
-            $goal->problem->member, NotificationEventType::TaskCompleted, new \App\Notifications\TaskCompletedNotification($goal->fresh())
+            $goal->problem->member, NotificationEventType::TaskCompleted, new TaskCompletedNotification($goal->fresh())
         );
 
         unset($this->problems);
@@ -813,12 +863,12 @@ class CareManagementIndex extends Component
 
     public function getRetroactiveTasks(): array
     {
-        if (!$this->newGoalId) {
+        if (! $this->newGoalId) {
             return [];
         }
 
         $goal = Task::find($this->newGoalId);
-        if (!$goal) {
+        if (! $goal) {
             return [];
         }
 
@@ -831,7 +881,7 @@ class CareManagementIndex extends Component
 
     public function saveRetroactiveAssociations(): void
     {
-        if ($this->newGoalId && !empty($this->retroactiveTaskIds)) {
+        if ($this->newGoalId && ! empty($this->retroactiveTaskIds)) {
             $goal = Task::where('type', TaskType::Goal)->findOrFail($this->newGoalId);
 
             foreach ($this->retroactiveTaskIds as $taskId) {
@@ -889,7 +939,7 @@ class CareManagementIndex extends Component
 
     public function getAvailableGoals(): array
     {
-        if (!$this->taskProblemId) {
+        if (! $this->taskProblemId) {
             return [];
         }
 
@@ -976,10 +1026,11 @@ class CareManagementIndex extends Component
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
+
             return;
         }
 
-        $timeout = (int) \App\Models\OrganizationSetting::get('lock_timeout_minutes', 15);
+        $timeout = (int) OrganizationSetting::get('lock_timeout_minutes', 15);
 
         $problem->update([
             'locked_by' => auth()->id(),
@@ -1005,8 +1056,9 @@ class CareManagementIndex extends Component
     {
         $user = auth()->user();
 
-        if (!$user->role || $user->role !== \App\Enums\UserRole::Admin) {
+        if (! $user->role || $user->role !== UserRole::Admin) {
             session()->flash('error', 'Only administrators can release locks.');
+
             return;
         }
 
@@ -1130,7 +1182,7 @@ class CareManagementIndex extends Component
     {
         $user = auth()->user();
 
-        if (!$user->role || !$user->role->canLogOutreach()) {
+        if (! $user->role || ! $user->role->canLogOutreach()) {
             return false;
         }
 
@@ -1149,13 +1201,15 @@ class CareManagementIndex extends Component
         // Enforce max 3 attempts
         if ($this->member->outreachLogs()->count() >= OutreachLog::MAX_ATTEMPTS) {
             $this->addError('outreachMethod', 'Maximum of 3 outreach attempts reached for this member.');
+
             return;
         }
 
         // Verify role permission
         $user = auth()->user();
-        if (!$user->role || !$user->role->canLogOutreach()) {
+        if (! $user->role || ! $user->role->canLogOutreach()) {
             $this->addError('outreachMethod', 'You do not have permission to log outreach attempts.');
+
             return;
         }
 
@@ -1186,7 +1240,7 @@ class CareManagementIndex extends Component
 
         // Notify lead care manager
         app(NotificationService::class)->notifyLeadCareManager(
-            $this->member, NotificationEventType::OutreachLogged, new \App\Notifications\OutreachLoggedNotification($log)
+            $this->member, NotificationEventType::OutreachLogged, new OutreachLoggedNotification($log)
         );
 
         $this->reset(['outreachMethod', 'outreachDate', 'outreachOutcome', 'outreachNotes']);
@@ -1201,6 +1255,7 @@ class CareManagementIndex extends Component
         if ($this->taskProblemId) {
             return Problem::find($this->taskProblemId)?->name ?? '';
         }
+
         return '';
     }
 
@@ -1210,6 +1265,14 @@ class CareManagementIndex extends Component
     {
         $this->member = $member;
         $this->jiConsentBlocked = $this->member->isJiConsentBlocked();
+    }
+
+    public function toggleNotificationSetting(string $eventType): void
+    {
+        $setting = NotificationSetting::where('event_type', $eventType)->first();
+        if ($setting) {
+            $setting->update(['enabled' => ! $setting->enabled]);
+        }
     }
 
     #[Layout('layouts.app')]
