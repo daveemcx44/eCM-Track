@@ -9,6 +9,7 @@ enum UserRole: string
     case AuthorizedClinician = 'authorized_clinician';
     case CommunityHealthWorker = 'community_health_worker';
     case Admin = 'admin';
+    case ComplianceOfficer = 'compliance_officer';
 
     public function label(): string
     {
@@ -18,6 +19,7 @@ enum UserRole: string
             self::AuthorizedClinician => 'Authorized Clinician',
             self::CommunityHealthWorker => 'Community Health Worker',
             self::Admin => 'Admin',
+            self::ComplianceOfficer => 'Compliance Officer',
         };
     }
 
@@ -86,7 +88,27 @@ enum UserRole: string
         ]);
     }
 
+    public function canAddProblem(): bool
+    {
+        return in_array($this, [
+            self::CareManager,
+            self::CommunityHealthWorker,
+            self::Supervisor,
+            self::AuthorizedClinician,
+        ]);
+    }
+
     public function canReleaseLock(): bool
+    {
+        return $this === self::Admin;
+    }
+
+    public function canConfigureNotifications(): bool
+    {
+        return $this === self::Admin;
+    }
+
+    public function isReadOnly(): bool
     {
         return $this === self::Admin;
     }
@@ -108,5 +130,10 @@ enum UserRole: string
             self::AuthorizedClinician,
             self::Admin,
         ]);
+    }
+
+    public function canOverrideConsentBlock(): bool
+    {
+        return $this === self::ComplianceOfficer;
     }
 }

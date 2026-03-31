@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\UserRole;
 use App\Models\Member;
 use App\Models\Note;
 use App\Models\Problem;
@@ -24,6 +25,7 @@ class DatabaseSeeder extends Seeder
             'name' => 'Test User',
             'email' => 'test@example.com',
             'password' => bcrypt('password'),
+            'role' => UserRole::Admin,
         ]);
 
         $careManagers = User::factory(4)->create();

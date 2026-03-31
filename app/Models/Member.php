@@ -15,6 +15,7 @@ class Member extends Model
     protected $fillable = [
         'name', 'dob', 'member_id', 'organization', 'status',
         'lead_care_manager', 'ji_consent_status',
+        'member_consent_status', 'bh_consent_status', 'sud_consent_status',
     ];
 
     protected function casts(): array
@@ -52,5 +53,60 @@ class Member extends Model
     public function isJiConsentBlocked(): bool
     {
         return $this->ji_consent_status === 'no_consent';
+    }
+
+    public function isMemberConsentBlocked(): bool
+    {
+        return $this->member_consent_status === 'no_consent';
+    }
+
+    public function isBhConsentBlocked(): bool
+    {
+        return $this->bh_consent_status === 'no_consent';
+    }
+
+    public function isSudConsentBlocked(): bool
+    {
+        return $this->sud_consent_status === 'no_consent';
+    }
+
+    /**
+     * Check if the entire CM module is blocked (Member or JI consent = No Consent).
+     */
+    public function isCmModuleBlocked(): bool
+    {
+        return $this->isMemberConsentBlocked() || $this->isJiConsentBlocked();
+    }
+
+    /**
+     * Get the reason the CM module is blocked, or null if not blocked.
+     */
+    public function getCmBlockReason(): ?string
+    {
+        if ($this->isMemberConsentBlocked()) {
+            return 'Member Consent is set to No Consent. All Care Management access is restricted.';
+        }
+
+        if ($this->isJiConsentBlocked()) {
+            return 'JI Consent is set to No Consent. All Care Management access is restricted.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the consent type that caused the block, for audit purposes.
+     */
+    public function getCmBlockConsentType(): ?string
+    {
+        if ($this->isMemberConsentBlocked()) {
+            return 'member_consent';
+        }
+
+        if ($this->isJiConsentBlocked()) {
+            return 'ji_consent';
+        }
+
+        return null;
     }
 }

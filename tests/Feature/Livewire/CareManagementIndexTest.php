@@ -4,6 +4,9 @@ namespace Tests\Feature\Livewire;
 
 use App\Enums\ProblemState;
 use App\Enums\ProblemType;
+use App\Enums\TaskCompletionType;
+use App\Enums\TaskState;
+use App\Enums\TaskType;
 use App\Enums\UserRole;
 use App\Livewire\CareManagement\CareManagementIndex;
 use App\Models\Member;
@@ -11,19 +14,15 @@ use App\Models\Problem;
 use App\Models\StateChangeHistory;
 use App\Models\Task;
 use App\Models\User;
-use App\Enums\TaskCompletionType;
-use App\Enums\TaskState;
-use App\Enums\TaskType;
-use App\Notifications\TaskAddedNotification;
-use App\Notifications\TaskCompletedNotification;
-use App\Notifications\TaskUncompletedNotification;
-use App\Notifications\TaskStartedNotification;
-use App\Models\Note;
 use App\Notifications\ProblemAddedNotification;
 use App\Notifications\ProblemConfirmedNotification;
 use App\Notifications\ProblemResolvedNotification;
 use App\Notifications\ProblemUnconfirmedNotification;
 use App\Notifications\ProblemUnresolvedNotification;
+use App\Notifications\TaskAddedNotification;
+use App\Notifications\TaskCompletedNotification;
+use App\Notifications\TaskStartedNotification;
+use App\Notifications\TaskUncompletedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Livewire\Livewire;
@@ -34,6 +33,7 @@ class CareManagementIndexTest extends TestCase
     use RefreshDatabase;
 
     private User $user;
+
     private Member $member;
 
     protected function setUp(): void
@@ -182,7 +182,7 @@ class CareManagementIndexTest extends TestCase
     {
         Livewire::actingAs($this->user)
             ->test(CareManagementIndex::class, ['member' => $this->member])
-            ->set('problemType', \App\Enums\ProblemType::Physical->value)
+            ->set('problemType', ProblemType::Physical->value)
             ->set('problemName', 'New Problem Via Save')
             ->call('saveProblem')
             ->assertSee('New Problem Via Save');
@@ -199,7 +199,8 @@ class CareManagementIndexTest extends TestCase
         Livewire::actingAs($this->user)
             ->test(CareManagementIndex::class, ['member' => $blockedMember])
             ->assertSee('Access Restricted')
-            ->assertDontSee('Add Problem');
+            ->assertSee($blockedMember->name) // CM Main Page still reachable (CM-ACC-002)
+            ->assertSee('No Care Management data is available due to consent restrictions');
     }
 
     public function test_ji_consent_blocked_prevents_save_problem(): void
@@ -2037,8 +2038,10 @@ class CareManagementIndexTest extends TestCase
         $task = Task::factory()->create([
             'problem_id' => $problem->id,
             'submitted_by' => $this->user->id,
-            'state' => TaskState::Added,
-            'type' => TaskType::Goal,
+            'state' => TaskState::Approved,
+            'approved_by' => $this->user->id,
+            'approved_at' => now(),
+            'type' => TaskType::Referrals,
         ]);
 
         // Start the task
@@ -2062,6 +2065,38 @@ class CareManagementIndexTest extends TestCase
         $this->assertDatabaseHas('resources', [
             'task_id' => $task->id,
             'survey_name' => 'Post-Start Resource',
+        ]);
+    }
+
+    public function test_resource_cannot_be_added_to_goal_task(): void
+    {
+        $problem = Problem::factory()->confirmed()->create([
+            'member_id' => $this->member->id,
+            'submitted_by' => $this->user->id,
+            'confirmed_by' => $this->user->id,
+        ]);
+
+        $goal = Task::factory()->create([
+            'problem_id' => $problem->id,
+            'submitted_by' => $this->user->id,
+            'state' => TaskState::Started,
+            'started_by' => $this->user->id,
+            'started_at' => now(),
+            'type' => TaskType::Goal,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(CareManagementIndex::class, ['member' => $this->member])
+            ->set('resourceTaskId', $goal->id)
+            ->set('surveyName', 'Goal Resource Attempt')
+            ->set('atHome', 'same')
+            ->set('atWork', 'better')
+            ->set('atPlay', 'worse')
+            ->call('saveResource')
+            ->assertHasErrors('resourceTaskId');
+
+        $this->assertDatabaseMissing('resources', [
+            'task_id' => $goal->id,
         ]);
     }
 

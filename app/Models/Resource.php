@@ -12,7 +12,7 @@ class Resource extends Model
     use HasFactory;
 
     protected $fillable = [
-        'task_id', 'survey_name', 'at_home', 'at_work', 'at_play',
+        'task_id', 'survey_name', 'survey_number', 'at_home', 'at_work', 'at_play',
         'details', 'submitted_by', 'submitted_at',
     ];
 

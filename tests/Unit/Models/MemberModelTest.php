@@ -24,10 +24,10 @@ class MemberModelTest extends TestCase
 
     public function test_member_has_fillable_attributes(): void
     {
-        $member = new Member();
+        $member = new Member;
 
         $this->assertEquals(
-            ['name', 'dob', 'member_id', 'organization', 'status', 'lead_care_manager', 'ji_consent_status'],
+            ['name', 'dob', 'member_id', 'organization', 'status', 'lead_care_manager', 'ji_consent_status', 'member_consent_status', 'bh_consent_status', 'sud_consent_status'],
             $member->getFillable()
         );
     }
@@ -81,5 +81,64 @@ class MemberModelTest extends TestCase
         $member = Member::factory()->create(['ji_consent_status' => null]);
 
         $this->assertFalse($member->isJiConsentBlocked());
+    }
+
+    // ─── Member Consent ─────
+
+    public function test_is_member_consent_blocked(): void
+    {
+        $member = Member::factory()->memberConsentBlocked()->create();
+        $this->assertTrue($member->isMemberConsentBlocked());
+        $this->assertTrue($member->isCmModuleBlocked());
+    }
+
+    public function test_member_consent_not_blocked_when_null(): void
+    {
+        $member = Member::factory()->create(['member_consent_status' => null]);
+        $this->assertFalse($member->isMemberConsentBlocked());
+    }
+
+    // ─── BH/SUD Consent ─────
+
+    public function test_is_bh_consent_blocked(): void
+    {
+        $member = Member::factory()->bhBlocked()->create();
+        $this->assertTrue($member->isBhConsentBlocked());
+        $this->assertFalse($member->isCmModuleBlocked());
+    }
+
+    public function test_is_sud_consent_blocked(): void
+    {
+        $member = Member::factory()->sudBlocked()->create();
+        $this->assertTrue($member->isSudConsentBlocked());
+        $this->assertFalse($member->isCmModuleBlocked());
+    }
+
+    // ─── CM Module Block ─────
+
+    public function test_cm_module_blocked_by_member_consent(): void
+    {
+        $member = Member::factory()->memberConsentBlocked()->create();
+        $this->assertTrue($member->isCmModuleBlocked());
+        $this->assertStringContainsString('Member Consent', $member->getCmBlockReason());
+        $this->assertEquals('member_consent', $member->getCmBlockConsentType());
+    }
+
+    public function test_cm_module_blocked_by_ji_consent(): void
+    {
+        $member = Member::factory()->jiBlocked()->create();
+        $this->assertTrue($member->isCmModuleBlocked());
+        $this->assertStringContainsString('JI Consent', $member->getCmBlockReason());
+        $this->assertEquals('ji_consent', $member->getCmBlockConsentType());
+    }
+
+    public function test_cm_module_not_blocked_when_consent_given(): void
+    {
+        $member = Member::factory()->create([
+            'ji_consent_status' => 'consented',
+            'member_consent_status' => 'consented',
+        ]);
+        $this->assertFalse($member->isCmModuleBlocked());
+        $this->assertNull($member->getCmBlockReason());
     }
 }

@@ -5,6 +5,7 @@ namespace App\Livewire\CareManagement;
 use App\Enums\NotificationEventType;
 use App\Enums\ProblemClassification;
 use App\Enums\ProblemState;
+use App\Enums\ProblemType;
 use App\Enums\TaskCompletionType;
 use App\Enums\TaskState;
 use App\Enums\TaskType;
@@ -25,6 +26,7 @@ use App\Notifications\ProblemConfirmedNotification;
 use App\Notifications\ProblemResolvedNotification;
 use App\Notifications\ProblemUnconfirmedNotification;
 use App\Notifications\ProblemUnresolvedNotification;
+use App\Notifications\ResourceAddedNotification;
 use App\Notifications\TaskAddedNotification;
 use App\Notifications\TaskCompletedNotification;
 use App\Notifications\TaskStartedNotification;
@@ -81,6 +83,10 @@ class CareManagementIndex extends Component
     public string $atWork = '';
 
     public string $atPlay = '';
+
+    public string $surveyNumber = '';
+
+    public string $resourceDetails = '';
 
     // ─── Unconfirm Modal ──────────────────────────────────────
     public ?int $unconfirmProblemId = null;
@@ -250,6 +256,18 @@ class CareManagementIndex extends Component
     {
         $query = $this->member->problems()->with('tasks.resources');
 
+        // CM-ACC-001 AC#3: Exclude blocked BH/SUD categories from results
+        $blockedTypes = [];
+        if ($this->bhConsentBlocked) {
+            $blockedTypes[] = ProblemType::Behavioral->value;
+        }
+        if ($this->sudConsentBlocked) {
+            $blockedTypes[] = ProblemType::SUD->value;
+        }
+        if ($blockedTypes) {
+            $query->whereNotIn('type', $blockedTypes);
+        }
+
         if ($this->activeFilter) {
             $query->where('type', $this->activeFilter);
         }
@@ -280,7 +298,14 @@ class CareManagementIndex extends Component
 
     public function saveProblem(): void
     {
-        if ($this->jiConsentBlocked) {
+        if ($this->cmModuleBlocked && ! $this->consentOverrideActive) {
+            return;
+        }
+
+        // Role gate: only CM, CHW, Supervisor, Authorized Clinician can add problems
+        if (! auth()->user()->can('create', Problem::class)) {
+            session()->flash('error', 'You do not have permission to add problems.');
+
             return;
         }
 
@@ -290,6 +315,19 @@ class CareManagementIndex extends Component
             'problemCode' => 'nullable|string|max:50',
             'problemEncounterSetting' => 'nullable|string',
         ]);
+
+        // CM-ACC-001 AC#3: BH/SUD category-level consent blocking
+        if ($this->bhConsentBlocked && $this->problemType === ProblemType::Behavioral->value) {
+            session()->flash('error', 'BH Consent is set to No Consent. Behavioral problems cannot be added.');
+
+            return;
+        }
+
+        if ($this->sudConsentBlocked && $this->problemType === ProblemType::SUD->value) {
+            session()->flash('error', 'SUD Consent is set to No Consent. SUD problems cannot be added.');
+
+            return;
+        }
 
         $problem = Problem::create([
             'member_id' => $this->member->id,
@@ -334,7 +372,18 @@ class CareManagementIndex extends Component
             return;
         }
 
-        // Check pessimistic lock
+        // CM-CON-002 AC#3: Notify if lock expired
+        if ($this->checkLockExpiredForCurrentUser($problem)) {
+            return;
+        }
+
+        // CM-CON-003 AC#3: Notify if lock was admin-released
+        if ($this->checkLockAdminReleased($problem)) {
+            return;
+        }
+
+        // Auto-acquire lock (AC#1: lock acquired when edit session begins)
+        $this->autoAcquireLock($problem);
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
@@ -368,6 +417,8 @@ class CareManagementIndex extends Component
             $problem->member, NotificationEventType::ProblemConfirmed, new ProblemConfirmedNotification($problem->fresh())
         );
 
+        // Release lock after successful action
+        $problem->releaseLock();
         unset($this->problems);
     }
 
@@ -375,6 +426,8 @@ class CareManagementIndex extends Component
     {
         $this->unconfirmProblemId = $problemId;
         $this->unconfirmNote = '';
+        // Auto-acquire lock when opening edit modal
+        $this->acquireLock($problemId);
     }
 
     public function unconfirmProblem(): void
@@ -388,6 +441,16 @@ class CareManagementIndex extends Component
 
         $problem = Problem::findOrFail($this->unconfirmProblemId);
 
+        // CM-CON-002 AC#3: Notify if lock expired
+        if ($this->checkLockExpiredForCurrentUser($problem)) {
+            return;
+        }
+
+        // CM-CON-003 AC#3: Notify if lock was admin-released
+        if ($this->checkLockAdminReleased($problem)) {
+            return;
+        }
+
         // Check role-based permission
         if (! auth()->user()->can('unconfirm', $problem)) {
             session()->flash('error', 'You do not have permission to unconfirm problems.');
@@ -395,7 +458,7 @@ class CareManagementIndex extends Component
             return;
         }
 
-        // Check pessimistic lock
+        // Lock already acquired in openUnconfirmModal
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
@@ -411,6 +474,8 @@ class CareManagementIndex extends Component
             $problem->member, NotificationEventType::ProblemUnconfirmed, new ProblemUnconfirmedNotification($problem->fresh(), $note)
         );
 
+        // Release lock after successful action
+        $problem->releaseLock();
         $this->reset(['unconfirmProblemId', 'unconfirmNote']);
         unset($this->problems);
     }
@@ -461,6 +526,18 @@ class CareManagementIndex extends Component
             return;
         }
 
+        // CM-CON-002 AC#3: Notify if lock expired
+        if ($this->checkLockExpiredForCurrentUser($problem)) {
+            return;
+        }
+
+        // CM-CON-003 AC#3: Notify if lock was admin-released
+        if ($this->checkLockAdminReleased($problem)) {
+            return;
+        }
+
+        // Auto-acquire lock
+        $this->autoAcquireLock($problem);
         if ($problem->isLockedByAnother(auth()->id())) {
             $lockedBy = $problem->lockedByUser?->name ?? 'another user';
             session()->flash('error', "This problem is currently locked by {$lockedBy}.");
@@ -475,6 +552,8 @@ class CareManagementIndex extends Component
             $problem->member, NotificationEventType::ProblemResolved, new ProblemResolvedNotification($problem->fresh())
         );
 
+        // Release lock after successful action
+        $problem->releaseLock();
         unset($this->problems);
     }
 
@@ -482,6 +561,8 @@ class CareManagementIndex extends Component
     {
         $this->unresolveProblemId = $problemId;
         $this->unresolveNote = '';
+        // Auto-acquire lock when opening edit modal
+        $this->acquireLock($problemId);
     }
 
     public function unresolveProblem(): void
@@ -494,6 +575,16 @@ class CareManagementIndex extends Component
         ]);
 
         $problem = Problem::findOrFail($this->unresolveProblemId);
+
+        // CM-CON-002 AC#3: Notify if lock expired
+        if ($this->checkLockExpiredForCurrentUser($problem)) {
+            return;
+        }
+
+        // CM-CON-003 AC#3: Notify if lock was admin-released
+        if ($this->checkLockAdminReleased($problem)) {
+            return;
+        }
 
         if (! auth()->user()->can('unresolve', $problem)) {
             session()->flash('error', 'You do not have permission to unresolve problems.');
@@ -526,6 +617,8 @@ class CareManagementIndex extends Component
             $this->dispatch('show-resolve-reactivation-dialog', problemId: $problem->id, taskCount: $cascadedCount);
         }
 
+        // Release lock after successful action
+        $problem->releaseLock();
         $this->reset(['unresolveProblemId', 'unresolveNote']);
         unset($this->problems);
     }
@@ -570,6 +663,8 @@ class CareManagementIndex extends Component
     {
         $this->taskProblemId = $problemId;
         $this->reset(['taskType', 'taskName', 'taskCode', 'taskEncounterSetting', 'taskProvider', 'taskDate', 'taskDueDate']);
+        // Auto-acquire lock on parent problem when adding task
+        $this->acquireLock($problemId);
     }
 
     public function saveTask(): void
@@ -629,6 +724,7 @@ class CareManagementIndex extends Component
             'changed_by' => auth()->id(),
             'metadata' => [
                 'event' => 'TASK_ADDED',
+                'task_type' => $this->taskType,
                 'problem_id' => $this->taskProblemId,
                 'member_id' => $problem->member_id,
             ],
@@ -662,6 +758,11 @@ class CareManagementIndex extends Component
 
                 return;
             }
+        }
+
+        // Release lock on parent problem after saving task
+        if ($problem->locked_by === auth()->id()) {
+            $problem->releaseLock();
         }
 
         $this->taskProblemId = null;
@@ -774,16 +875,18 @@ class CareManagementIndex extends Component
         $this->resourceTaskId = $taskId;
         $task = Task::findOrFail($taskId);
         $this->surveyName = 'Resource '.($task->resources()->count() + 1);
-        $this->reset(['atHome', 'atWork', 'atPlay']);
+        $this->reset(['surveyNumber', 'atHome', 'atWork', 'atPlay', 'resourceDetails']);
     }
 
     public function saveResource(): void
     {
         $this->validate([
             'surveyName' => 'required|string|max:255',
+            'surveyNumber' => 'nullable|string|max:50',
             'atHome' => 'required|string',
             'atWork' => 'required|string',
             'atPlay' => 'required|string',
+            'resourceDetails' => 'nullable|string',
             'resourceTaskId' => 'required|exists:tasks,id',
         ]);
 
@@ -797,18 +900,40 @@ class CareManagementIndex extends Component
             return;
         }
 
-        Resource::create([
+        $resource = Resource::create([
             'task_id' => $this->resourceTaskId,
             'survey_name' => $this->surveyName,
+            'survey_number' => $this->surveyNumber ?: null,
             'at_home' => $this->atHome,
             'at_work' => $this->atWork,
             'at_play' => $this->atPlay,
+            'details' => $this->resourceDetails ?: null,
             'submitted_by' => auth()->id(),
             'submitted_at' => now(),
         ]);
 
+        // Audit event: RESOURCE_ADDED
+        StateChangeHistory::create([
+            'trackable_type' => Resource::class,
+            'trackable_id' => $resource->id,
+            'from_state' => null,
+            'to_state' => 'created',
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'RESOURCE_ADDED',
+                'task_id' => $task->id,
+                'problem_id' => $task->problem_id,
+                'member_id' => $task->problem->member_id,
+            ],
+        ]);
+
+        // Notify lead care manager
+        app(NotificationService::class)->notifyLeadCareManager(
+            $task->problem->member, NotificationEventType::ResourceAdded, new ResourceAddedNotification($resource)
+        );
+
         $this->resourceTaskId = null;
-        $this->reset(['surveyName', 'atHome', 'atWork', 'atPlay']);
+        $this->reset(['surveyName', 'surveyNumber', 'atHome', 'atWork', 'atPlay', 'resourceDetails']);
         unset($this->problems);
     }
 
@@ -1013,6 +1138,42 @@ class CareManagementIndex extends Component
 
     // ─── Lock Actions ─────────────────────────────────────────
 
+    /**
+     * Silently acquire a lock on a problem for editing.
+     * Auto-releases expired locks first.
+     */
+    private function autoAcquireLock(Problem $problem): void
+    {
+        // Auto-release expired locks and notify if it was our lock (CM-CON-002)
+        if ($problem->isLockExpired()) {
+            $wasOurLock = $problem->locked_by === auth()->id();
+            $problem->releaseLock();
+            $problem->refresh();
+            if ($wasOurLock) {
+                session()->flash('warning', 'Your lock on this problem has expired due to inactivity. A new lock has been acquired.');
+            }
+        }
+
+        // If already locked by this user, just refresh the expiry
+        if ($problem->locked_by === auth()->id()) {
+            $timeout = (int) OrganizationSetting::get('lock_timeout_minutes', 15);
+            $problem->update(['lock_expires_at' => now()->addMinutes($timeout)]);
+
+            return;
+        }
+
+        // If not locked, acquire it
+        if (! $problem->locked_by) {
+            $timeout = (int) OrganizationSetting::get('lock_timeout_minutes', 15);
+            $problem->update([
+                'locked_by' => auth()->id(),
+                'locked_at' => now(),
+                'lock_session_id' => session()->getId(),
+                'lock_expires_at' => now()->addMinutes($timeout),
+            ]);
+        }
+    }
+
     public function acquireLock(int $problemId): void
     {
         $problem = Problem::findOrFail($problemId);
@@ -1074,8 +1235,13 @@ class CareManagementIndex extends Component
             'metadata' => [
                 'event' => 'LOCK_ADMIN_RELEASED',
                 'original_lock_holder' => $originalLockHolder,
+                'released_at' => now()->toISOString(),
+                'notified' => false,
             ],
         ]);
+
+        // Notify original lock holder via session flash (CM-CON-003)
+        // In a real system this would be a push notification; for now, audit trail captures it
 
         $problem->releaseLock();
         unset($this->problems);
@@ -1248,6 +1414,87 @@ class CareManagementIndex extends Component
         unset($this->canLogOutreach);
     }
 
+    // ─── Lock Timeout Configuration (CM-CON-002) ──────────────
+
+    public string $lockTimeoutMinutes = '15';
+
+    public function initLockTimeout(): void
+    {
+        $this->lockTimeoutMinutes = (string) OrganizationSetting::get('lock_timeout_minutes', '15');
+    }
+
+    public function updateLockTimeout(): void
+    {
+        $user = auth()->user();
+        if (! $user->role || ! $user->role->canConfigureNotifications()) {
+            session()->flash('error', 'Only administrators can update lock timeout settings.');
+
+            return;
+        }
+
+        $this->validate([
+            'lockTimeoutMinutes' => 'required|integer|min:1|max:120',
+        ], [
+            'lockTimeoutMinutes.required' => 'Timeout duration is required.',
+            'lockTimeoutMinutes.min' => 'Timeout must be at least 1 minute.',
+            'lockTimeoutMinutes.max' => 'Timeout cannot exceed 120 minutes.',
+        ]);
+
+        OrganizationSetting::set('lock_timeout_minutes', $this->lockTimeoutMinutes);
+        $this->showInfoMessage("Lock timeout updated to {$this->lockTimeoutMinutes} minutes.");
+    }
+
+    /**
+     * Check if a problem's lock has expired for the current user.
+     * Returns true (and flashes error) if the lock expired and user must re-enter edit mode.
+     */
+    private function checkLockExpiredForCurrentUser(Problem $problem): bool
+    {
+        if ($problem->locked_by === auth()->id() && $problem->isLockExpired()) {
+            $problem->releaseLock();
+            session()->flash('error', 'Your lock on this problem has expired due to inactivity. Please re-enter edit mode before saving.');
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * CM-CON-003 AC#3: Check if the current user's lock was admin-released.
+     * Returns true (and flashes error) if lock was released by admin since user last held it.
+     */
+    private function checkLockAdminReleased(Problem $problem): bool
+    {
+        $userId = auth()->id();
+
+        // Only check if the problem is currently unlocked (lock was released)
+        if ($problem->locked_by !== null) {
+            return false;
+        }
+
+        $adminRelease = StateChangeHistory::where('trackable_type', Problem::class)
+            ->where('trackable_id', $problem->id)
+            ->where('metadata->event', 'LOCK_ADMIN_RELEASED')
+            ->where('metadata->original_lock_holder', $userId)
+            ->where('metadata->notified', false)
+            ->latest()
+            ->first();
+
+        if ($adminRelease) {
+            // Mark as notified so user only sees this once
+            $meta = $adminRelease->metadata;
+            $meta['notified'] = true;
+            $adminRelease->update(['metadata' => $meta]);
+
+            session()->flash('error', 'Your lock on this problem was released by an administrator. Please re-acquire the lock before saving.');
+
+            return true;
+        }
+
+        return false;
+    }
+
     // ─── Helpers ─────────────────────────────────────────────
 
     public function getTaskProblemName(): string
@@ -1259,16 +1506,134 @@ class CareManagementIndex extends Component
         return '';
     }
 
+    public string $infoMessage = '';
+
+    public function showInfoMessage(string $message): void
+    {
+        $this->infoMessage = $message;
+        $this->dispatch('show-info-toast');
+    }
+
     public bool $jiConsentBlocked = false;
+
+    public bool $cmModuleBlocked = false;
+
+    public string $cmBlockReason = '';
+
+    public bool $bhConsentBlocked = false;
+
+    public bool $sudConsentBlocked = false;
+
+    public bool $consentOverrideActive = false;
 
     public function mount(Member $member): void
     {
         $this->member = $member;
+        $this->initLockTimeout();
+        $this->refreshConsentState();
+
+        // Audit blocked access attempts (CM-ACC-001 AC#6)
+        if ($this->cmModuleBlocked && ! $this->consentOverrideActive) {
+            StateChangeHistory::create([
+                'trackable_type' => Member::class,
+                'trackable_id' => $member->id,
+                'from_state' => 'access_attempt',
+                'to_state' => 'access_blocked',
+                'changed_by' => auth()->id(),
+                'metadata' => [
+                    'event' => 'CM_ACCESS_BLOCKED',
+                    'consent_type' => $member->getCmBlockConsentType(),
+                    'timestamp' => now()->toISOString(),
+                ],
+            ]);
+        }
+
+        // Audit BH/SUD category-level blocking
+        if ($this->bhConsentBlocked) {
+            StateChangeHistory::create([
+                'trackable_type' => Member::class,
+                'trackable_id' => $member->id,
+                'from_state' => 'access_attempt',
+                'to_state' => 'category_blocked',
+                'changed_by' => auth()->id(),
+                'metadata' => [
+                    'event' => 'CM_ACCESS_BLOCKED',
+                    'consent_type' => 'bh_consent',
+                    'timestamp' => now()->toISOString(),
+                ],
+            ]);
+        }
+
+        if ($this->sudConsentBlocked) {
+            StateChangeHistory::create([
+                'trackable_type' => Member::class,
+                'trackable_id' => $member->id,
+                'from_state' => 'access_attempt',
+                'to_state' => 'category_blocked',
+                'changed_by' => auth()->id(),
+                'metadata' => [
+                    'event' => 'CM_ACCESS_BLOCKED',
+                    'consent_type' => 'sud_consent',
+                    'timestamp' => now()->toISOString(),
+                ],
+            ]);
+        }
+    }
+
+    /**
+     * Refresh consent state from database (no caching — AC#5).
+     */
+    private function refreshConsentState(): void
+    {
+        $this->member->refresh();
         $this->jiConsentBlocked = $this->member->isJiConsentBlocked();
+        $this->cmModuleBlocked = $this->member->isCmModuleBlocked();
+        $this->cmBlockReason = $this->member->getCmBlockReason() ?? '';
+        $this->bhConsentBlocked = $this->member->isBhConsentBlocked();
+        $this->sudConsentBlocked = $this->member->isSudConsentBlocked();
+
+        // consentOverrideActive stays false until explicitly activated via activateConsentOverride()
+    }
+
+    /**
+     * CM-ACC-001 AC#7: Compliance officer activates override to access blocked record.
+     */
+    public function activateConsentOverride(): void
+    {
+        $user = auth()->user();
+        if (! $user->role || ! $user->role->canOverrideConsentBlock()) {
+            session()->flash('error', 'Only compliance officers can override consent blocks.');
+
+            return;
+        }
+
+        $this->consentOverrideActive = true;
+
+        StateChangeHistory::create([
+            'trackable_type' => Member::class,
+            'trackable_id' => $this->member->id,
+            'from_state' => 'access_blocked',
+            'to_state' => 'access_override',
+            'changed_by' => auth()->id(),
+            'metadata' => [
+                'event' => 'CM_ACCESS_OVERRIDE',
+                'consent_type' => $this->member->getCmBlockConsentType(),
+                'override_by' => $user->id,
+                'timestamp' => now()->toISOString(),
+            ],
+        ]);
     }
 
     public function toggleNotificationSetting(string $eventType): void
     {
+        // Only MCP Admins can modify notification settings
+        $user = auth()->user();
+        if (! $user->role || ! $user->role->canConfigureNotifications()) {
+            session()->flash('error', 'Only administrators can configure notification settings.');
+
+            return;
+        }
+
         $setting = NotificationSetting::where('event_type', $eventType)->first();
         if ($setting) {
             $setting->update(['enabled' => ! $setting->enabled]);

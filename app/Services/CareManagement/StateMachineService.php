@@ -119,7 +119,7 @@ class StateMachineService
     {
         $fromState = $problem->state;
 
-        if (!$fromState->canTransitionTo($targetState)) {
+        if (! $fromState->canTransitionTo($targetState)) {
             throw new InvalidStateTransitionException(
                 $fromState->value,
                 $targetState->value,
@@ -141,7 +141,7 @@ class StateMachineService
             ->update($updateData);
 
         if ($affected === 0) {
-            throw new StaleModelException();
+            throw new StaleModelException;
         }
 
         // Sync the in-memory model
@@ -167,7 +167,7 @@ class StateMachineService
         $fromState = $task->state;
         $isGoal = $task->isGoal();
 
-        if (!$fromState->canTransitionTo($targetState, $isGoal)) {
+        if (! $fromState->canTransitionTo($targetState, $isGoal)) {
             throw new InvalidStateTransitionException(
                 $fromState->value,
                 $targetState->value,
@@ -178,7 +178,7 @@ class StateMachineService
         $task->state = $targetState;
         $task->save();
 
-        // Log state change
+        // Log state change with task_type metadata
         StateChangeHistory::create([
             'trackable_type' => Task::class,
             'trackable_id' => $task->id,
@@ -186,6 +186,7 @@ class StateMachineService
             'to_state' => $targetState->value,
             'changed_by' => $user->id,
             'note' => $note,
+            'metadata' => ['task_type' => $task->type->value],
         ]);
     }
 

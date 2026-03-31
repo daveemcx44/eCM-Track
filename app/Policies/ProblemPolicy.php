@@ -15,7 +15,7 @@ class ProblemPolicy
 
     public function create(User $user): bool
     {
-        return true;
+        return $user->role && $user->role->canAddProblem();
     }
 
     public function confirm(User $user, Problem $problem): bool

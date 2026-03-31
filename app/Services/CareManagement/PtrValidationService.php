@@ -4,6 +4,7 @@ namespace App\Services\CareManagement;
 
 use App\Enums\ProblemState;
 use App\Enums\TaskState;
+use App\Enums\TaskType;
 use App\Models\Problem;
 use App\Models\Task;
 use InvalidArgumentException;
@@ -18,7 +19,7 @@ class PtrValidationService
     {
         if ($problem->state !== ProblemState::Confirmed) {
             throw new InvalidArgumentException(
-                'Tasks can only be added to confirmed problems. Current state: ' . $problem->state->label()
+                'Tasks can only be added to confirmed problems. Current state: '.$problem->state->label()
             );
         }
     }
@@ -29,9 +30,15 @@ class PtrValidationService
      */
     public function validateResourceCreation(Task $task): void
     {
-        if (!in_array($task->state, [TaskState::Started, TaskState::Completed])) {
+        if ($task->type === TaskType::Goal) {
             throw new InvalidArgumentException(
-                'Resources can only be added to started or completed tasks. Current state: ' . $task->state->label()
+                'Resources cannot be added to Goals, only to non-Goal tasks.'
+            );
+        }
+
+        if (! in_array($task->state, [TaskState::Started, TaskState::Completed])) {
+            throw new InvalidArgumentException(
+                'Resources can only be added to started or completed tasks. Current state: '.$task->state->label()
             );
         }
     }

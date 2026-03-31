@@ -18,6 +18,9 @@ class MemberFactory extends Factory
             'organization' => fake()->randomElement(['Serene Health', 'Valley Care', 'Pacific Health Network', 'Golden State Medical']),
             'status' => 'active',
             'ji_consent_status' => null,
+            'member_consent_status' => null,
+            'bh_consent_status' => null,
+            'sud_consent_status' => null,
         ];
     }
 
@@ -25,6 +28,27 @@ class MemberFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'ji_consent_status' => 'no_consent',
+        ]);
+    }
+
+    public function memberConsentBlocked(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'member_consent_status' => 'no_consent',
+        ]);
+    }
+
+    public function bhBlocked(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'bh_consent_status' => 'no_consent',
+        ]);
+    }
+
+    public function sudBlocked(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'sud_consent_status' => 'no_consent',
         ]);
     }
 }
