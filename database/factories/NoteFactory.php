@@ -18,6 +18,7 @@ class NoteFactory extends Factory
             'notable_id' => Problem::factory(),
             'content' => fake()->paragraph(),
             'created_by' => User::factory(),
+            'tenant_id' => 1,
         ];
     }
 

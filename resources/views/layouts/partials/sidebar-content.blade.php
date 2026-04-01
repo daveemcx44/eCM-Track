@@ -89,6 +89,13 @@
     </ul>
 </nav>
 
+{{-- Admin-only Tenant Switcher --}}
+@if(Auth::user()->role?->isAdmin())
+    <div x-show="!collapsed">
+        @livewire('tenant-switcher')
+    </div>
+@endif
+
 {{-- User profile section at bottom --}}
 <div class="border-t border-gray-200 dark:border-gray-700 py-3" :class="collapsed ? 'px-2' : 'px-4'" x-data="{ open: false }">
     {{-- Collapsed: just show avatar --}}

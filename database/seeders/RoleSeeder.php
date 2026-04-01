@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Enums\UserRole;
+use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -10,13 +11,18 @@ use Illuminate\Support\Facades\Hash;
 class RoleSeeder extends Seeder
 {
     /**
-     * Seed one user per role with predictable credentials.
+     * Seed default tenant and one user per role with predictable credentials.
      *
      * Email pattern: {role}@ecmtrack.test
      * Password: password (all users)
      */
     public function run(): void
     {
+        // Create default tenant
+        $tenant = Tenant::firstOrCreate(
+            ['slug' => 'default'],
+            ['name' => 'Default Organization']
+        );
         $users = [
             [
                 'name' => 'Admin User',
@@ -56,6 +62,7 @@ class RoleSeeder extends Seeder
                 'email' => $userData['email'],
                 'password' => Hash::make('password'),
                 'role' => $userData['role'],
+                'tenant_id' => $tenant->id,
             ]);
         }
     }

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,10 +10,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CarePlan extends Model
 {
-    use HasFactory;
+    use BelongsToTenant, HasFactory;
 
     protected $fillable = [
-        'member_id', 'version_number', 'assessment_type',
+        'tenant_id', 'member_id', 'version_number', 'assessment_type',
         'assessment_date', 'risk_level', 'next_reassessment_date',
     ];
 

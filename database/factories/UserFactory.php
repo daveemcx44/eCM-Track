@@ -38,6 +38,7 @@ class UserFactory extends Factory
             'role' => UserRole::CareManager,
             'profile_photo_path' => null,
             'current_team_id' => null,
+            'tenant_id' => 1,
         ];
     }
 

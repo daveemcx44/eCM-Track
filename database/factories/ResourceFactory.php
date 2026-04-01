@@ -16,13 +16,14 @@ class ResourceFactory extends Factory
     {
         return [
             'task_id' => Task::factory()->started(),
-            'survey_name' => 'Survey ' . fake()->numberBetween(1, 10),
+            'survey_name' => 'Survey '.fake()->numberBetween(1, 10),
             'at_home' => fake()->randomElement(ResourceRating::cases()),
             'at_work' => fake()->randomElement(ResourceRating::cases()),
             'at_play' => fake()->randomElement(ResourceRating::cases()),
             'details' => fake()->optional()->paragraph(),
             'submitted_by' => User::factory(),
             'submitted_at' => now(),
+            'tenant_id' => 1,
         ];
     }
 }

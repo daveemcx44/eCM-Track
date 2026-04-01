@@ -25,6 +25,7 @@ class ProblemFactory extends Factory
             'state' => ProblemState::Added,
             'submitted_by' => User::factory(),
             'submitted_at' => now(),
+            'tenant_id' => 1,
         ];
     }
 

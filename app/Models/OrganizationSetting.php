@@ -2,11 +2,14 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 
 class OrganizationSetting extends Model
 {
-    protected $fillable = ['key', 'value'];
+    use BelongsToTenant;
+
+    protected $fillable = ['tenant_id', 'key', 'value'];
 
     /**
      * Get a setting value by key with an optional default.

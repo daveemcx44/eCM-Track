@@ -2,16 +2,19 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class StateChangeHistory extends Model
 {
+    use BelongsToTenant;
+
     const UPDATED_AT = null;
 
     protected $fillable = [
-        'trackable_type', 'trackable_id', 'from_state', 'to_state',
+        'tenant_id', 'trackable_type', 'trackable_id', 'from_state', 'to_state',
         'changed_by', 'note', 'metadata',
     ];
 

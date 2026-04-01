@@ -6,6 +6,7 @@ use App\Enums\EncounterSetting;
 use App\Enums\TaskCompletionType;
 use App\Enums\TaskState;
 use App\Enums\TaskType;
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,10 +17,10 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Task extends Model
 {
-    use HasFactory, SoftDeletes;
+    use BelongsToTenant, HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'problem_id', 'name', 'type', 'code', 'encounter_setting',
+        'tenant_id', 'problem_id', 'name', 'type', 'code', 'encounter_setting',
         'provider', 'task_date', 'due_date', 'state', 'completion_type',
         'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
         'started_by', 'started_at', 'completed_by', 'completed_at',

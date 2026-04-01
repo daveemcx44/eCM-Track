@@ -23,6 +23,7 @@ class OutreachLogFactory extends Factory
             'notes' => $this->faker->optional()->sentence(),
             'staff_id' => User::factory(),
             'logged_at' => now(),
+            'tenant_id' => 1,
         ];
     }
 }

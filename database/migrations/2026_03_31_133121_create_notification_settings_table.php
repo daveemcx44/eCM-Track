@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -27,9 +28,11 @@ return new class extends Migration
         ];
 
         foreach ($eventTypes as $type) {
-            \App\Models\NotificationSetting::create([
+            DB::table('notification_settings')->insert([
                 'event_type' => $type,
                 'enabled' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
         }
     }

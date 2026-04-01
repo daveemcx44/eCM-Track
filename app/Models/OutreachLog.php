@@ -4,18 +4,19 @@ namespace App\Models;
 
 use App\Enums\OutreachMethod;
 use App\Enums\OutreachOutcome;
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class OutreachLog extends Model
 {
-    use HasFactory;
+    use BelongsToTenant, HasFactory;
 
     const UPDATED_AT = null;
 
     protected $fillable = [
-        'member_id', 'method', 'outreach_date', 'outcome',
+        'tenant_id', 'member_id', 'method', 'outreach_date', 'outcome',
         'notes', 'staff_id', 'logged_at',
     ];
 

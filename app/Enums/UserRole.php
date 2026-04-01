@@ -98,6 +98,11 @@ enum UserRole: string
         ]);
     }
 
+    public function isAdmin(): bool
+    {
+        return $this === self::Admin;
+    }
+
     public function canReleaseLock(): bool
     {
         return $this === self::Admin;

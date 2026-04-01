@@ -27,7 +27,7 @@ class MemberModelTest extends TestCase
         $member = new Member;
 
         $this->assertEquals(
-            ['name', 'dob', 'member_id', 'organization', 'status', 'lead_care_manager', 'ji_consent_status', 'member_consent_status', 'bh_consent_status', 'sud_consent_status'],
+            ['name', 'dob', 'member_id', 'organization', 'status', 'lead_care_manager', 'ji_consent_status', 'member_consent_status', 'bh_consent_status', 'sud_consent_status', 'tenant_id'],
             $member->getFillable()
         );
     }

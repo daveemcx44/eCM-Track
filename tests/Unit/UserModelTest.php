@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Tests\TestCase;
 
 class UserModelTest extends TestCase
@@ -22,14 +23,14 @@ class UserModelTest extends TestCase
 
     public function test_user_has_fillable_attributes(): void
     {
-        $user = new User();
+        $user = new User;
 
-        $this->assertEquals(['name', 'email', 'password', 'role'], $user->getFillable());
+        $this->assertEquals(['name', 'email', 'password', 'role', 'tenant_id'], $user->getFillable());
     }
 
     public function test_user_hides_sensitive_attributes(): void
     {
-        $user = new User();
+        $user = new User;
         $hidden = $user->getHidden();
 
         $this->assertContains('password', $hidden);
@@ -52,7 +53,7 @@ class UserModelTest extends TestCase
     {
         $user = User::factory()->create();
 
-        $this->assertInstanceOf(\Illuminate\Support\Carbon::class, $user->email_verified_at);
+        $this->assertInstanceOf(Carbon::class, $user->email_verified_at);
     }
 
     public function test_user_has_profile_photo_url_appended(): void

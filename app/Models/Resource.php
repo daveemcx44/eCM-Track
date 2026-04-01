@@ -3,16 +3,17 @@
 namespace App\Models;
 
 use App\Enums\ResourceRating;
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Resource extends Model
 {
-    use HasFactory;
+    use BelongsToTenant, HasFactory;
 
     protected $fillable = [
-        'task_id', 'survey_name', 'survey_number', 'at_home', 'at_work', 'at_play',
+        'tenant_id', 'task_id', 'survey_name', 'survey_number', 'at_home', 'at_work', 'at_play',
         'details', 'submitted_by', 'submitted_at',
     ];
 

@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -19,9 +20,11 @@ return new class extends Migration
         });
 
         // Seed default lock timeout
-        \App\Models\OrganizationSetting::create([
+        DB::table('organization_settings')->insert([
             'key' => 'lock_timeout_minutes',
             'value' => '15',
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
     }
 

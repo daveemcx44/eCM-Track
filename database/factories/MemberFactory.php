@@ -21,6 +21,7 @@ class MemberFactory extends Factory
             'member_consent_status' => null,
             'bh_consent_status' => null,
             'sud_consent_status' => null,
+            'tenant_id' => 1,
         ];
     }
 

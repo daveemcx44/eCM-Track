@@ -19,6 +19,7 @@ class CarePlanFactory extends Factory
             'assessment_date' => $this->faker->dateTimeBetween('-6 months', 'now'),
             'risk_level' => $this->faker->randomElement(['Low', 'Medium', 'High']),
             'next_reassessment_date' => $this->faker->dateTimeBetween('now', '+6 months'),
+            'tenant_id' => 1,
         ];
     }
 

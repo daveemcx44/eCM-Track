@@ -25,6 +25,7 @@ class TaskFactory extends Factory
             'state' => TaskState::Added,
             'submitted_by' => User::factory(),
             'submitted_at' => now(),
+            'tenant_id' => 1,
         ];
     }
 

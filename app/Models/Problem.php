@@ -6,6 +6,7 @@ use App\Enums\EncounterSetting;
 use App\Enums\ProblemClassification;
 use App\Enums\ProblemState;
 use App\Enums\ProblemType;
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,10 +16,10 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Problem extends Model
 {
-    use HasFactory, SoftDeletes;
+    use BelongsToTenant, HasFactory, SoftDeletes;
 
     protected $fillable = [
-        'member_id', 'name', 'type', 'code', 'encounter_setting',
+        'tenant_id', 'member_id', 'name', 'type', 'code', 'encounter_setting',
         'state', 'submitted_by', 'submitted_at', 'confirmed_by',
         'confirmed_at', 'resolved_by', 'resolved_at', 'lock_version',
         'locked_by', 'locked_at', 'lock_session_id', 'lock_expires_at',
@@ -90,7 +91,7 @@ class Problem extends Model
 
     public function isLockedByAnother(?int $userId): bool
     {
-        if (!$this->locked_by) {
+        if (! $this->locked_by) {
             return false;
         }
 

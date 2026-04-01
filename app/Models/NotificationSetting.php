@@ -3,11 +3,14 @@
 namespace App\Models;
 
 use App\Enums\NotificationEventType;
+use App\Models\Traits\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 
 class NotificationSetting extends Model
 {
-    protected $fillable = ['event_type', 'enabled'];
+    use BelongsToTenant;
+
+    protected $fillable = ['tenant_id', 'event_type', 'enabled'];
 
     protected function casts(): array
     {
