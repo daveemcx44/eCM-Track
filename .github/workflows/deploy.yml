@@ -1,0 +1,53 @@
+name: Deploy to EC2 Staging
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install PHP dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build assets
+        run: npm run build
+
+      - name: Copy files to app directory
+        run: |
+          rsync -av --delete \
+            --exclude='.env' \
+            --exclude='database/database.sqlite' \
+            --exclude='storage/' \
+            --exclude='.git/' \
+            ./ /var/www/ecm-staging/
+
+      - name: Set permissions
+        run: |
+          sudo chown -R ubuntu:www-data /var/www/ecm-staging
+          sudo chmod -R 775 /var/www/ecm-staging/storage
+          sudo chmod -R 775 /var/www/ecm-staging/bootstrap/cache
+
+      - name: Run migrations
+        run: |
+          cd /var/www/ecm-staging
+          php artisan migrate --force
+
+      - name: Optimize Laravel
+        run: |
+          cd /var/www/ecm-staging
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+
+      - name: Restart PHP-FPM
+        run: sudo systemctl restart php8.2-fpm
